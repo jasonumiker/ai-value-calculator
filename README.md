@@ -2,16 +2,16 @@
 
 > **Illustrative prototype:** every organization, study, approval, cost, and result in this repository is fictional demo data. Nothing shown is a customer result.
 
-AI Value Calculator helps leaders decide where to **scale, redesign, or stop** AI investment. It combines existing aggregate cost and workflow data with occasional neutral staff pulses and focused outcome studies. It never inspects work content or scores individuals.
+AI Value Calculator helps leaders decide where to **scale, redesign, keep measuring, or stop** AI investment. It combines existing aggregate cost and workflow data with occasional neutral staff pulses and focused outcome studies. It never inspects work content or scores individuals.
 
 The dashboard deliberately reports two decision views against the same total AI investment:
 
 | View | Value included | Interpretation |
 | --- | --- | --- |
-| **Validated ROI** | Evidence-adjusted claims at the Validated or Realized stage. | The claim-backed baseline. It contains no Pulse extrapolation, although an eligible claim can still use a disclosed, finance-approved valuation model. |
+| **Validated ROI** | Evidence-adjusted claims at the Validated or Realized stage. | The claim-backed baseline. It contains no Pulse extrapolation. |
 | **Pulse-inclusive ROI** | Validated claim value plus a separately governed estimate for the unclaimed long tail of small, ad-hoc tasks. | A modelled portfolio estimate shown with a 95% **Pulse sampling interval** and explicit assumptions; it is not booked savings. |
 
-An individual Pulse response never changes Validated ROI. The interval on Pulse-inclusive ROI measures sampling variation in the Pulse component only; it does not represent every source of uncertainty in the portfolio.
+No Pulse response enters Validated ROI. The interval on Pulse-inclusive ROI measures sampling variation in the Pulse component only; it does not represent every source of uncertainty in the portfolio.
 
 ## The Decisions the AI Value Calculator Supports
 
@@ -42,6 +42,8 @@ AI Value Calculator keeps four value stages separate:
 | **Validated** | A stable operational outcome has a baseline, credible comparison, guardrail, transparent valuation, and approval. | Eligible for evidence-adjusted Validated ROI. |
 | **Realized** | Finance records show a posted saving, incremental gross margin, or another reconciled result. | Eligible for evidence-adjusted Validated ROI. |
 
+"Validated" means claim-backed, not necessarily cash-only: a claim can have an observed operational outcome and a clearly identified, finance-approved modelled valuation. Realized claims identify the subset reconciled to posted financial or equivalent records.
+
 In the calculator, a claim enters Validated ROI only when it is Validated or Realized, has positive gross value and valuation evidence, and has a unique overlap key for its cohort, benefit mechanism, and period. Signal and Capacity claims remain visible but do not enter that calculation.
 
 **Discovery-only evidence** means an early Signal-stage finding or a manually opened Pulse preview that is useful for choosing what to study but is ineligible for both ROI calculations. A governed random-sample Pulse response is also excluded from Validated ROI, but it may enter the separate Pulse-inclusive projection when every projection gate passes.
@@ -60,6 +62,8 @@ Leaders define a use case, expected work effect, observable operational outcome,
 
 ### 3. Use an occasional neutral pulse for discovery and bounded estimation
 
+#### What the pulse asks
+
 The optional pulse asks only:
 
 - Compared with the usual approach, how many hours slower or faster was the task, using a synchronized slider or hours field?
@@ -67,7 +71,9 @@ The optional pulse asks only:
 
 Product, team, and work context are prefilled and can be corrected before submission. The pulse does not ask employees to infer business results they cannot observe. Responses are aggregated and negative answers are retained.
 
-Population projection is permitted only for invitations selected randomly from a known aggregate task-event frame. The demo strata are product groups; production strata could also include broad role or work-type groups where privacy thresholds permit. The frame counts deduplicated credit-consuming sessions rather than credits themselves, because one task can consume many credits. The fictional totals are certified as having been prefiltered upstream to remove sessions represented by registered value claims; the browser prototype checks that policy flag but does not identify or subtract overlapping sessions itself. Manually opened previews and other convenience responses remain discovery-only.
+#### How responses become eligible for projection
+
+Population projection is permitted only for invitations selected randomly from a known aggregate task-event frame. The demo strata are product groups. The frame counts deduplicated credit-consuming sessions rather than credits themselves; counting credits would over-represent chatty tasks in $N_h$ and inflate the projection. The fictional totals are certified as having been prefiltered upstream to remove sessions represented by registered value claims; the browser prototype checks that policy flag but does not identify or subtract overlapping sessions itself. Manually opened previews and other convenience responses remain discovery-only.
 
 The prototype therefore distinguishes two response categories:
 
@@ -142,7 +148,7 @@ Each claim has one primary pillar. That avoids cross-pillar duplication, while o
 A claim can observe an operational result and model its financial value. AI Value Calculator records both grades:
 
 - **Observed:** measured in an operational or financial system.
-- **Estimated:** inferred from a representative sample or estimation method.
+- **Estimated:** inferred from a representative sample. Only a governed probability sample qualifies for the Pulse projection.
 - **Modelled:** calculated from explicit assumptions and observed or estimated inputs.
 - **Anecdotal:** supported by a qualitative case or individual account.
 
@@ -171,7 +177,7 @@ $$
 {\mathrm{Total\ AI\ investment}}
 $$
 
-It contains no Pulse extrapolation. “Validated” means claim-backed, not necessarily cash-only: a claim can have an observed operational outcome and a clearly identified, finance-approved modelled valuation. Realized claims identify the subset reconciled to posted financial or equivalent records.
+It contains no Pulse extrapolation.
 
 #### Pulse-inclusive ROI
 
@@ -181,7 +187,7 @@ $$
 \widehat H_{\mathrm{Pulse}} = \sum_h N_h\bar y_h
 $$
 
-Sampling variance uses the within-stratum sample variance $s_h^2$, a finite-population correction, and a disclosed design effect $D_h$:
+Sampling variance uses the within-stratum sample variance $s_h^2$, a finite-population correction (which shrinks the variance when a large share of the population is sampled), and a disclosed design effect $D_h$ (which inflates the variance to account for clustering, stratification, or unequal weighting that is not present in a simple random sample):
 
 $$
 \operatorname{SE}(\widehat H_{\mathrm{Pulse}}) =
@@ -194,7 +200,7 @@ The prototype uses a conservative Student-$t$ critical value based on the smalle
 
 The interval covers random sampling variation only. It does **not** cover non-response bias, recall or self-report bias, task-frame coverage error, mistakes when excluding overlapping claim scopes, uncertainty in the calibration or reuse assumptions, or uncertainty already present in validated claims and costs.
 
-Time is valued asymmetrically. Positive reported capacity is reduced by a calibration factor $c$ and a demonstrated-reuse rate $r$. Slower-task time is charged at the full policy-set hourly value rate $v$, so the model does not discount adverse results:
+Time is valued asymmetrically. Positive reported capacity is reduced by a calibration factor $c$ and a demonstrated-reuse rate $r$. Slower-task time is charged at the full policy-set hourly value rate $v$. The asymmetry is deliberate: reported time saved is fragile and receives calibration and reuse haircuts, while reported time lost is charged at full rate so the model cannot reward suppressing bad results.
 
 $$
 g(y_i)=v\begin{cases}
@@ -280,7 +286,7 @@ For Validated ROI, $V$ is evidence-adjusted Validated and Realized claim value. 
 | Minimum response rate | 50% per stratum | Non-response eligibility gate, not proof that non-response bias is absent |
 | Self-report calibration | 75% | Reduces positive reported time for likely reporting error |
 | Capacity realization | 60% | Values only the share of positive time assumed to be reused productively |
-| Modelled value rate | $50 per hour | Fictional policy-set contribution value; not a universal labor-cost rate |
+| Modelled value rate | $50 per hour | Fictional policy-set contribution value; not a universal labor-cost rate. Set independently of the backlog-hour rate used in the worked demo, which happens to coincide for illustration. |
 | Design effect | 1.25× | Inflates sampling variance for residual design complexity |
 | Pulse sampling confidence level | 95% | Sampling interval level; other uncertainty sources remain outside the interval |
 | Negative task time | 100% of value rate | Retains the full modelled cost of slower work |
@@ -298,7 +304,7 @@ Every claim contribution records:
 - Stage, approval, and overlap key.
 - Whether it is included in or excluded from Validated ROI.
 
-The dashboard's **Claim evidence coverage** score reports whether required fields are present on Validated-ROI claims. It does not grade the Pulse model or claim that a study is causally perfect. **Policy retention** separately reports how much eligible gross claim value remains after evidence and confidence weights.
+The dashboard's **Claim evidence coverage** score reports whether required fields are present on Validated-ROI claims. It is a presence check, not a quality assessment: it does not grade the Pulse model, judge whether the recorded evidence is strong, or claim that a study is causally perfect. **Policy retention** separately reports how much eligible gross claim value remains after evidence and confidence weights.
 
 ## MVP Capabilities and Boundaries
 
@@ -322,6 +328,15 @@ The dashboard's **Claim evidence coverage** score reports whether required field
 The prototype is a React and TypeScript single-page app. It stores demo responses, hypotheses, import metadata, and policy settings in `localStorage`. CSV content is parsed in the browser; imported rows are not persisted by the prototype.
 
 Basic field-name checks are not a production data-loss-prevention control. Do not upload sensitive or real employee data.
+
+### Limits of this prototype
+
+A few limitations are called out in-line above; they are consolidated here so a reviewer can weigh them together:
+
+- Upstream claim-scope exclusion is a **trust flag**, not enforcement. The browser checks that the source certifies prefiltering; it cannot verify session-level removal.
+- The 95% Pulse sampling interval covers **sampling variation only**. Non-response bias, recall or self-report bias, task-frame coverage error, and uncertainty in the calibration, reuse, and hourly-value assumptions are outside the interval.
+- CSV import runs **field-name checks**, not DLP. The prototype rejects obvious direct-identifier columns but does not inspect row content, and it does not persist imported rows.
+- Policy weights, projection gates, and suppression thresholds are enforced **client-side** for demonstration. Production must enforce them server-side under authenticated, versioned policy.
 
 ## Screenshots
 
@@ -366,7 +381,7 @@ npm run lint
 npm run test
 ```
 
-The unit suite covers evidence eligibility, dual evidence weights, total cost, Validated ROI, overlap prevention, pillars, projection gating, upstream frame certification, stratified Pulse estimation, negative-task treatment, and the Pulse-inclusive ROI interval. Integration tests cover the dual dashboard figures, locked claim weights, neutral Pulse collection, aggregate reporting, modelling disclosures, hypotheses and guardrails, the claims register, and identifier-aware CSV ingestion.
+The unit suite exercises evidence eligibility, dual evidence weights, total cost, Validated ROI, overlap prevention, pillars, projection gating, upstream frame certification, stratified Pulse estimation, negative-task treatment, and the Pulse-inclusive ROI interval. Integration tests exercise the dual dashboard figures, locked claim weights, neutral Pulse collection, aggregate reporting, modelling disclosures, hypotheses and guardrails, the claims register, and identifier-aware CSV ingestion.
 
 ## Evaluation and Privacy References
 
