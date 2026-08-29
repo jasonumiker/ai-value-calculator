@@ -1,169 +1,231 @@
-import { describe, it, expect } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import {
   calculatePortfolio,
-  defaultAssumptions,
-  estimateProductiveHours,
-  formatCurrency,
-  formatShort,
-  studies,
+  combinePulseWithPortfolio,
   copilotSpend,
-  sampledPopulation,
-  periodsPerMonth,
+  defaultAssumptions,
+  estimatePulseValue,
+  formatCurrency,
+  formatPercent,
+  formatShort,
+  pulseProjectionPolicy,
+  studies,
+  summarizePulse,
+  valueClaims,
+  type Assumptions,
+  type ResponseRecord,
+  type ValueClaim,
 } from './model'
-import type { Assumptions, ResponseRecord } from './model'
 
-const allOnes: Assumptions = {
-  ...defaultAssumptions,
-  observedWeight: 1, estimatedWeight: 1, modelledWeight: 1, anecdotalWeight: 1,
-  highConfidenceWeight: 1, mediumConfidenceWeight: 1, lowConfidenceWeight: 1,
-}
-const allZero: Assumptions = {
-  ...defaultAssumptions,
-  observedWeight: 0, estimatedWeight: 0, modelledWeight: 0, anecdotalWeight: 0,
-  highConfidenceWeight: 0, mediumConfidenceWeight: 0, lowConfidenceWeight: 0,
-}
-const response = (timeSaved: string): ResponseRecord => ({
-  id: 1, role: 'r', team: 't', product: 'GitHub Copilot', workType: 'w',
-  timeSaved, effect: 'Speed', outcome: 'More work completed', date: 'Today',
+const response = (timeImpact: string, id = 1): ResponseRecord => ({
+  id,
+  product: 'GitHub Copilot',
+  workType: 'Code and tests',
+  timeImpact,
+  effect: 'No material change',
+  date: 'Today',
 })
 
-describe('README defaults', () => {
-  it('matches the documented valuation policy defaults', () => {
-    expect(defaultAssumptions).toEqual({
-      loadedHourlyCost: 65, realizationFactor: 0.55,
-      observedWeight: 1, estimatedWeight: 0.85, modelledWeight: 0.75, anecdotalWeight: 0.4,
-      highConfidenceWeight: 1, mediumConfidenceWeight: 0.9, lowConfidenceWeight: 0.75,
-    })
-  })
-  it('uses the documented Copilot spend', () => {
+const sampledResponse = (product: ResponseRecord['product'], timeImpact: number, id: number): ResponseRecord => ({
+  ...response(String(timeImpact), id),
+  product,
+  sampleFrameId: pulseProjectionPolicy.id,
+})
+
+describe('governed defaults and total cost', () => {
+  it('includes product, implementation, enablement, and operating costs', () => {
+    const portfolio = calculatePortfolio(defaultAssumptions)
     expect(copilotSpend).toBe(28460)
-  })
-})
-
-describe('calculatePortfolio — evidence-adjusted value', () => {
-  it('adjusted value equals gross when every weight is 100% (health = 100)', () => {
-    const p = calculatePortfolio(1000, allOnes)
-    expect(p.adjustedValue).toBeCloseTo(p.rawValue, 5)
-    expect(p.healthScore).toBe(100)
-  })
-
-  it('zeroing all weights removes all adjusted value (health = 0)', () => {
-    const p = calculatePortfolio(1000, allZero)
-    expect(p.adjustedValue).toBe(0)
-    expect(p.healthScore).toBe(0)
-  })
-
-  it('evidence health = round(adjusted / gross * 100)', () => {
-    const p = calculatePortfolio(1500, defaultAssumptions)
-    expect(p.healthScore).toBe(Math.round((p.adjustedValue / p.rawValue) * 100))
-    expect(p.healthScore).toBeLessThan(100)
-  })
-
-  it('adjusts each contribution by evidence weight × confidence multiplier', () => {
-    // Anecdotal "New capability cases" (52600) is Low confidence.
-    const raised = { ...defaultAssumptions, anecdotalWeight: 0.8 }
-    const lowered = { ...defaultAssumptions, anecdotalWeight: 0.2 }
-    const delta = calculatePortfolio(0, raised).adjustedValue - calculatePortfolio(0, lowered).adjustedValue
-    // Δweight (0.6) × gross (52600) × Low confidence multiplier (0.75)
-    expect(delta).toBeCloseTo(0.6 * 52600 * defaultAssumptions.lowConfidenceWeight, 5)
-  })
-
-  it('converts productive hours to gross value via hourly cost × realization factor', () => {
-    const a = calculatePortfolio(1000, defaultAssumptions).rawValue
-    const b = calculatePortfolio(2000, defaultAssumptions).rawValue
-    expect(b - a).toBeCloseTo(1000 * defaultAssumptions.loadedHourlyCost * defaultAssumptions.realizationFactor, 5)
-  })
-
-  it('net value = adjusted value − AI cost', () => {
-    const { adjustedValue } = calculatePortfolio(1200, defaultAssumptions)
-    expect(adjustedValue - copilotSpend).toBeCloseTo(adjustedValue - 28460, 5)
-  })
-})
-
-describe('calculatePortfolio — four Business Value pillars', () => {
-  it('returns exactly the four documented pillars with metadata', () => {
-    const { pillars } = calculatePortfolio(1000, defaultAssumptions)
-    expect(pillars.map((p) => p.label)).toEqual([
-      'Improved Performance', 'Cost Savings', 'Innovation / Transformation', 'Risk Mitigation',
-    ])
-    pillars.forEach((p) => {
-      expect(p.color).toMatch(/^#/)
-      expect(typeof p.description).toBe('string')
+    expect(defaultAssumptions).toMatchObject({
+      implementationCost: 18000,
+      enablementCost: 9000,
+      operationsCost: 6000,
     })
+    expect(portfolio.totalCost).toBe(61460)
   })
 
-  it('evidence mix percentages sum to 100 when gross value is positive', () => {
-    const { evidenceMix } = calculatePortfolio(1000, defaultAssumptions)
-    const total = evidenceMix.reduce((sum, item) => sum + item.percentage, 0)
-    expect(total).toBeCloseTo(100, 5)
-  })
-})
-
-describe('outcome studies feed the portfolio', () => {
-  it('gross value includes every study grossValue plus the non-study contributions', () => {
-    const studyGross = studies.reduce((sum, s) => sum + s.grossValue, 0)
-    // With 0 hours the surveyed-productivity contribution is 0.
-    expect(calculatePortfolio(0, defaultAssumptions).rawValue).toBeCloseTo(studyGross + 52600 + 67900, 5)
-  })
-
-  it('assigns study gross value to the study pillar', () => {
-    const { pillars } = calculatePortfolio(0, defaultAssumptions)
-    const byLabel = Object.fromEntries(pillars.map((p) => [p.label, p.rawValue]))
-    expect(byLabel['Improved Performance']).toBeCloseTo(84200 + 46000, 5)
-    expect(byLabel['Cost Savings']).toBeCloseTo(40100, 5)
-  })
-
-  it('includes matched-team, pre/post, and staggered-rollout designs', () => {
-    const groups = studies.map((s) => s.group).join(' | ')
-    expect(groups).toMatch(/matched teams/)
-    expect(groups).toMatch(/pre\/post/)
-    expect(groups).toMatch(/staggered rollout/)
-  })
-
-  it('labels studies with Observed and Estimated evidence and allows optional baselines', () => {
-    expect(studies.some((s) => s.grade === 'Observed')).toBe(true)
-    expect(studies.some((s) => s.grade === 'Estimated')).toBe(true)
-    expect(studies.some((s) => !s.baseline)).toBe(true)
-    expect(studies.some((s) => s.baseline && s.comparison)).toBe(true)
+  it('uses standard ROI math for the explicit Validated view', () => {
+    const portfolio = calculatePortfolio(defaultAssumptions)
+    expect(portfolio.netValue).toBeCloseTo(portfolio.adjustedValue - portfolio.totalCost, 5)
+    expect(portfolio.roi).toBeCloseTo(portfolio.netValue / portfolio.totalCost, 5)
+    expect(portfolio.benefitCostRatio).toBeCloseTo(portfolio.adjustedValue / portfolio.totalCost, 5)
+    expect(portfolio.validatedValue).toBe(portfolio.adjustedValue)
+    expect(portfolio.validatedNetValue).toBe(portfolio.netValue)
+    expect(portfolio.validatedRoi).toBe(portfolio.roi)
+    expect(portfolio.validatedBenefitCostRatio).toBe(portfolio.benefitCostRatio)
   })
 })
 
-describe('estimateProductiveHours — experience sampling', () => {
-  it('returns zero hours for no responses', () => {
-    expect(estimateProductiveHours([])).toEqual({ low: 0, mid: 0 })
+describe('Validated ROI eligibility', () => {
+  it('counts only validated and realized claims with a valuation source', () => {
+    const portfolio = calculatePortfolio(defaultAssumptions)
+    expect(portfolio.contributions.map((claim) => claim.stage)).toEqual(['Validated', 'Realized', 'Validated'])
+    expect(portfolio.rawValue).toBe(84000 + 16500 + 32000)
+    expect(portfolio.pipelineValue).toBe(44100)
+    expect(portfolio.contributions.some((claim) => claim.name === 'Knowledge work preparation')).toBe(false)
+    expect(portfolio.contributions.some((claim) => claim.name === 'New AI-assisted service concept')).toBe(false)
   })
 
-  it('extrapolates a single sampled response to the population and period', () => {
-    const { low, mid } = estimateProductiveHours([response('1–4 hours')])
-    const scale = sampledPopulation * periodsPerMonth
-    expect(low).toBeCloseTo(1 * scale, 5)
-    expect(mid).toBeCloseTo(2.5 * scale, 5)
+  it('keeps operational and valuation evidence separate and applies the conservative weight', () => {
+    const developer = calculatePortfolio(defaultAssumptions).contributions.find((claim) => claim.id === 'developer-delivery')!
+    expect(developer.operationalGrade).toBe('Observed')
+    expect(developer.valuationGrade).toBe('Modelled')
+    expect(developer.limitingGrade).toBe('Modelled')
+    expect(developer.adjustedValue).toBeCloseTo(84000 * 0.75, 5)
   })
 
-  it('averages the sample so repeated identical responses do not inflate hours', () => {
-    const one = estimateProductiveHours([response('1–4 hours')])
-    const two = estimateProductiveHours([response('1–4 hours'), response('1–4 hours')])
-    expect(two.low).toBeCloseTo(one.low, 5)
+  it('uses transparent demo values and computes evidence retention', () => {
+    const portfolio = calculatePortfolio(defaultAssumptions)
+    expect(portfolio.adjustedValue).toBeCloseTo(99900, 5)
+    expect(portfolio.retentionRate).toBe(Math.round(99900 / 132500 * 100))
+    expect(portfolio.evidenceCoverage).toBe(100)
   })
 
-  it('treats unknown or "None" buckets as zero saved time', () => {
-    expect(estimateProductiveHours([response('None')])).toEqual({ low: 0, mid: 0 })
-    expect(estimateProductiveHours([response('not-a-bucket')])).toEqual({ low: 0, mid: 0 })
+  it('prevents two eligible claims with the same cohort-period overlap key from being counted', () => {
+    const original = valueClaims.find((claim) => claim.id === 'external-research-spend')!
+    const duplicate: ValueClaim = { ...original, id: 'duplicate', name: 'Duplicate claim', grossValue: 999999 }
+    const portfolio = calculatePortfolio(defaultAssumptions, [...valueClaims, duplicate])
+    expect(portfolio.rawValue).toBe(132500)
+    expect(portfolio.excludedDuplicates).toHaveLength(1)
+    expect(portfolio.excludedDuplicates[0].id).toBe('duplicate')
+  })
+})
+
+describe('evidence policy', () => {
+  it('adjusts eligible value without changing gross value or total cost', () => {
+    const stricter: Assumptions = { ...defaultAssumptions, modelledWeight: 0.25 }
+    const baseline = calculatePortfolio(defaultAssumptions)
+    const reduced = calculatePortfolio(stricter)
+    expect(reduced.rawValue).toBe(baseline.rawValue)
+    expect(reduced.totalCost).toBe(baseline.totalCost)
+    expect(reduced.adjustedValue).toBeLessThan(baseline.adjustedValue)
   })
 
-  it('a larger time-saved bucket produces more estimated hours', () => {
-    const small = estimateProductiveHours([response('<15 minutes')]).low
-    const large = estimateProductiveHours([response('>4 hours')]).low
-    expect(large).toBeGreaterThan(small)
+  it('returns all four pillars without inventing innovation value', () => {
+    const pillars = calculatePortfolio(defaultAssumptions).pillars
+    expect(pillars.map((pillar) => pillar.label)).toEqual([
+      'Improved Performance',
+      'Cost Savings',
+      'Innovation / Transformation',
+      'Risk Mitigation',
+    ])
+    expect(pillars.find((pillar) => pillar.label === 'Innovation / Transformation')?.value).toBe(0)
+  })
+
+  it('retains observed, estimated, and modelled study provenance', () => {
+    expect(studies.some((study) => study.operationalGrade === 'Observed')).toBe(true)
+    expect(studies.some((study) => study.operationalGrade === 'Estimated')).toBe(true)
+    expect(studies.some((study) => study.valuationGrade === 'Modelled')).toBe(true)
+    expect(studies.some((study) => study.stage === 'Capacity')).toBe(true)
+  })
+})
+
+describe('optional employee pulse', () => {
+  it('summarizes only the collected sample and disables population projection', () => {
+    const summary = summarizePulse([response('1–4 hours faster')])
+    expect(summary.low).toBe(1)
+    expect(summary.mid).toBe(2.5)
+    expect(summary.responseCount).toBe(1)
+    expect(summary.projectionEligible).toBe(false)
+    expect(summary.projectionReason).toMatch(/sampling frame/i)
+  })
+
+  it('preserves neutral and negative responses', () => {
+    const summary = summarizePulse([
+      response('No meaningful difference'),
+      response('15–30 minutes slower', 2),
+      response('30–60 minutes faster', 3),
+    ])
+    expect(summary.faster).toBe(1)
+    expect(summary.neutral).toBe(1)
+    expect(summary.slower).toBe(1)
+    expect(summary.low).toBe(0)
+  })
+
+  it('uses exact hours entered by the synchronized pulse controls', () => {
+    const summary = summarizePulse([
+      response('-1.25'),
+      response('2.5', 2),
+    ])
+    expect(summary.low).toBe(1.25)
+    expect(summary.mid).toBe(1.25)
+    expect(summary.faster).toBe(1)
+    expect(summary.slower).toBe(1)
+  })
+
+  it('does not feed pulse responses into the portfolio calculation', () => {
+    const before = calculatePortfolio(defaultAssumptions)
+    summarizePulse(Array.from({ length: 100 }, (_, index) => response('1–4 hours faster', index)))
+    const after = calculatePortfolio(defaultAssumptions)
+    expect(after.adjustedValue).toBe(before.adjustedValue)
+    expect(after.roi).toBe(before.roi)
+  })
+})
+
+describe('governed Pulse projection', () => {
+  const effects = [1, 0.5, 0.25, 0, -0.25, 0.5, 0.25, 0, -0.25, 0.25]
+  const sampled = (['GitHub Copilot', 'Copilot Cowork'] as const).flatMap((product, productIndex) =>
+    effects.map((effect, index) => sampledResponse(product, effect, productIndex * 10 + index)),
+  )
+
+  it('requires a known random frame rather than extrapolating convenience responses', () => {
+    const projection = estimatePulseValue(Array.from({ length: 20 }, (_, index) => response('1', index)))
+    expect(projection.projectionEligible).toBe(false)
+    expect(projection.sampledResponseCount).toBe(0)
+    expect(projection.projectionReason).toMatch(/fewer than 10 sampled responses/i)
+  })
+
+  it('requires certification that registered claim scopes were removed upstream', () => {
+    const projection = estimatePulseValue(sampled, {
+      ...pulseProjectionPolicy,
+      registeredClaimScopesExcludedUpstream: false,
+    })
+    expect(projection.projectionEligible).toBe(false)
+    expect(projection.projectionReason).toMatch(/not certified as excluding registered claim scopes upstream/i)
+  })
+
+  it('post-stratifies sampled task effects and returns a wide 95% interval', () => {
+    const projection = estimatePulseValue(sampled)
+    expect(projection.projectionEligible).toBe(true)
+    expect(projection.sampledResponseCount).toBe(20)
+    expect(projection.populationTaskEvents).toBe(1200)
+    expect(projection.estimatedHours).toBeCloseTo(270, 5)
+    expect(projection.hoursInterval.low).toBeLessThan(projection.estimatedHours)
+    expect(projection.hoursInterval.high).toBeGreaterThan(projection.estimatedHours)
+    expect(projection.valueInterval.low).toBeLessThan(projection.estimatedValue)
+    expect(projection.valueInterval.high).toBeGreaterThan(projection.estimatedValue)
+  })
+
+  it('discounts positive capacity but charges slower-task time at full value', () => {
+    const projection = estimatePulseValue(sampled)
+    expect(projection.estimatedValue).toBeGreaterThan(0)
+    expect(projection.estimatedValue).toBeLessThan(projection.estimatedHours * pulseProjectionPolicy.contributionValuePerHour)
+
+    const slower = pulseProjectionPolicy.strata.flatMap((stratum, productIndex) =>
+      Array.from({ length: 10 }, (_, index) => sampledResponse(stratum.product, -1, productIndex * 10 + index)),
+    )
+    expect(estimatePulseValue(slower).estimatedValue).toBe(-1200 * pulseProjectionPolicy.contributionValuePerHour)
+  })
+
+  it('keeps validated ROI intact and exposes the Pulse-inclusive ROI separately', () => {
+    const portfolio = calculatePortfolio(defaultAssumptions)
+    const projection = estimatePulseValue(sampled)
+    const combined = combinePulseWithPortfolio(portfolio.adjustedValue, portfolio.totalCost, projection)
+    expect(portfolio.roi).toBeCloseTo((portfolio.adjustedValue - portfolio.totalCost) / portfolio.totalCost, 5)
+    expect(combined.roi).toBeGreaterThan(portfolio.roi)
+    expect(combined.benefitCostRatio).toBeCloseTo(combined.value / portfolio.totalCost, 5)
+    expect(combined.roiInterval.low).toBeLessThan(combined.roi)
+    expect(combined.roiInterval.high).toBeGreaterThan(combined.roi)
+    expect(combined.benefitCostRatioInterval.low).toBeLessThan(combined.benefitCostRatio)
+    expect(combined.benefitCostRatioInterval.high).toBeGreaterThan(combined.benefitCostRatio)
   })
 })
 
 describe('formatting helpers', () => {
-  it('formats currency with thousands separators', () => {
+  it('formats money, short money, and standard ROI percentages', () => {
     expect(formatCurrency(28460)).toBe('$28,460')
-    expect(formatCurrency(0)).toBe('$0')
-  })
-  it('formats short currency in thousands', () => {
-    expect(formatShort(84200)).toBe('$84.2k')
+    expect(formatCurrency(-1200)).toBe('−$1,200')
+    expect(formatShort(84000)).toBe('$84.0k')
+    expect(formatPercent(0.625)).toBe('63%')
   })
 })
