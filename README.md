@@ -381,6 +381,14 @@ npm run lint
 npm run test
 ```
 
+Refresh every image in the Screenshots section from a clean, deterministic demo state with:
+
+```bash
+npm run screenshots
+```
+
+The first setup on Ubuntu or WSL also requires `npx playwright install --with-deps chromium` so the matching browser, Linux runtime libraries, and fonts are available.
+
 The unit suite exercises evidence eligibility, dual evidence weights, total cost, Validated ROI, overlap prevention, pillars, projection gating, upstream frame certification, stratified Pulse estimation, negative-task treatment, and the Pulse-inclusive ROI interval. Integration tests exercise the dual dashboard figures, locked claim weights, neutral Pulse collection, aggregate reporting, modelling disclosures, hypotheses and guardrails, the claims register, and identifier-aware CSV ingestion.
 
 ## Evaluation and Privacy References
