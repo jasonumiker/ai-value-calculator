@@ -6,6 +6,17 @@ export type Confidence = 'High' | 'Medium' | 'Low'
 export type PillarLabel = 'Improved Performance' | 'Cost Savings' | 'Innovation / Transformation' | 'Risk Mitigation'
 export type ValueStage = 'Signal' | 'Capacity' | 'Validated' | 'Realized'
 
+export type Hypothesis = {
+  id: number
+  useCase: string
+  owner: string
+  product: Product
+  expectedEffect: string
+  outcome: string
+  evidence: string
+  guardrail: string
+}
+
 export type ResponseRecord = {
   id: number
   product: Product
@@ -118,9 +129,69 @@ export type ValueClaim = {
   guardrail: string
   overlapKey: string
   approvedBy?: string
+  financialReview?: FinancialReview
+  realization?: FinancialRealization
+}
+
+export type FinancialProposal = {
+  pillar: PillarLabel
+  grossValue: number
+  valuationFormula: string
+  valuationSource: string
+  valuationGrade: EvidenceGrade
+  confidence: Confidence
+  overlapKey: string
+  policyVersion: string
+  assumptions: string
+}
+
+type FinancialEvidence = Pick<ValueClaim, 'id' | 'name' | 'team' | 'product' | 'cohort' | 'period' | 'baseline' | 'comparison' | 'operationalSource' | 'operationalGrade' | 'guardrail'> & {
+  metric?: string
+  result?: string
+  progress?: number
+}
+
+export type FinancialReviewEvent = {
+  action: 'Submitted' | 'Approved' | 'Rejected' | 'Realized'
+  actor: string
+  recordedAt: string
+  notes: string
+  proposal?: FinancialProposal
+  evidence?: FinancialEvidence
+  realization?: FinancialRealization
+  riskOwner?: string
+  checks?: Pick<FinancialDecision, 'evidenceChecked' | 'guardrailsChecked' | 'overlapChecked'>
+}
+
+export type FinancialReview = {
+  status: 'Pending' | 'Approved' | 'Rejected'
+  proposal: FinancialProposal
+  evidence: FinancialEvidence
+  history: FinancialReviewEvent[]
+}
+
+export type FinancialDecision = {
+  actor: string
+  notes: string
+  evidenceChecked: boolean
+  guardrailsChecked: boolean
+  overlapChecked: boolean
+  riskOwner: string
+}
+
+export type FinancialRealization = {
+  grossValue: number
+  formula: string
+  source: string
+  actor: string
+  notes: string
+  recordedAt: string
 }
 
 export type Study = ValueClaim & {
+  hypothesisId?: Hypothesis['id']
+  expectedEffect?: string
+  outcome?: string
   metric: string
   result: string
   progress: number
@@ -129,9 +200,211 @@ export type Study = ValueClaim & {
   capacityHours?: number
 }
 
-export const studies: Study[] = [
+export type StudyRecord = Omit<Study, 'icon'>
+
+export function createStudyFromHypothesis(hypothesis: Hypothesis): StudyRecord {
+  return {
+    id: `hypothesis-${hypothesis.id}`,
+    hypothesisId: hypothesis.id,
+    name: hypothesis.useCase,
+    team: hypothesis.owner,
+    product: hypothesis.product,
+    expectedEffect: hypothesis.expectedEffect,
+    outcome: hypothesis.outcome,
+    metric: hypothesis.outcome,
+    operationalSource: hypothesis.evidence,
+    guardrail: hypothesis.guardrail,
+    pillar: 'Improved Performance',
+    stage: 'Signal',
+    grossValue: 0,
+    confidence: 'Low',
+    operationalGrade: 'Anecdotal',
+    cohort: '',
+    period: '',
+    result: 'Not measured yet',
+    progress: 0,
+    overlapKey: `hypothesis-${hypothesis.id}|unvalidated`,
+  }
+}
+
+export function getHypothesisStatus(hypothesisId: number, records: StudyRecord[]) {
+  const study = records.find((record) => record.hypothesisId === hypothesisId)
+  if (!study) return 'Ready to test'
+  return study.progress === 100 ? 'Study complete' : 'In study'
+}
+
+function financialEvidence(claim: ValueClaim): FinancialEvidence {
+  const study = claim as Partial<StudyRecord>
+  return {
+    id: claim.id,
+    name: claim.name,
+    team: claim.team,
+    product: claim.product,
+    cohort: claim.cohort,
+    period: claim.period,
+    baseline: claim.baseline,
+    comparison: claim.comparison,
+    operationalSource: claim.operationalSource,
+    operationalGrade: claim.operationalGrade,
+    guardrail: claim.guardrail,
+    metric: study.metric,
+    result: study.result,
+    progress: study.progress,
+  }
+}
+
+function matchesFinancialEvidence(claim: ValueClaim, evidence: FinancialEvidence) {
+  const current = financialEvidence(claim)
+  return (Object.keys(current) as (keyof FinancialEvidence)[]).every((key) => current[key] === evidence[key])
+}
+
+export function isFinanciallyApproved(claim: ValueClaim) {
+  const review = claim.financialReview
+  if (!review || review.status !== 'Approved' || !matchesFinancialEvidence(claim, review.evidence)) return false
+  const decision = review.history.findLast((event) => event.action === 'Approved')
+  const latest = review.history.at(-1)
+  const proposal = review.proposal
+  if (!decision?.actor.trim() || !decision.recordedAt || !decision.notes.trim() || !proposal.policyVersion.trim()) return false
+  if (!decision.checks?.evidenceChecked || !decision.checks.guardrailsChecked || !decision.checks.overlapChecked) return false
+  if (proposal.pillar === 'Risk Mitigation' && !decision.riskOwner?.trim()) return false
+  if (!Number.isFinite(proposal.grossValue) || proposal.grossValue <= 0 || !proposal.assumptions.trim()
+    || !proposal.valuationFormula.trim() || !proposal.valuationSource.trim() || !proposal.overlapKey.trim()) return false
+  if (claim.pillar !== proposal.pillar || claim.confidence !== proposal.confidence || claim.overlapKey !== proposal.overlapKey) return false
+  if (claim.stage === 'Realized') {
+    const realized = claim.realization
+    return !!realized && latest?.action === 'Realized' && !!realized.source.trim() && !!realized.formula.trim()
+      && !!realized.actor.trim() && !!realized.notes.trim() && !!realized.recordedAt
+      && Number.isFinite(realized.grossValue) && realized.grossValue >= 0
+      && !!latest.realization && (Object.keys(realized) as (keyof FinancialRealization)[]).every((key) => realized[key] === latest.realization?.[key])
+      && claim.grossValue === realized.grossValue && claim.valuationSource === realized.source
+      && claim.valuationFormula === realized.formula && claim.valuationGrade === 'Observed' && claim.approvedBy === realized.actor
+  }
+  return claim.stage === 'Validated' && latest?.action === 'Approved' && claim.approvedBy === decision.actor
+    && claim.grossValue === proposal.grossValue && claim.valuationGrade === proposal.valuationGrade
+    && claim.valuationFormula === proposal.valuationFormula && claim.valuationSource === proposal.valuationSource
+}
+
+function assertReviewableStudy(study: StudyRecord) {
+  if (study.progress !== 100) throw new Error('Complete the study before requesting financial review.')
+  if (![study.cohort, study.period, study.metric, study.baseline, study.comparison, study.result, study.operationalSource, study.guardrail].every((value) => value?.trim()) || study.result === 'Not measured yet') {
+    throw new Error('Financial review requires a cohort, period, metric, baseline, comparison, result, source, and guardrail.')
+  }
+  if (!['Observed', 'Estimated', 'Modelled'].includes(study.operationalGrade)) throw new Error('Anecdotal evidence alone is not eligible for financial approval.')
+}
+
+function assertNoFinancialOverlap(studyId: string, overlapKey: string, claims: ValueClaim[]) {
+  const duplicate = claims.find((claim) => claim.id !== studyId && (claim.financialReview?.status === 'Pending' || isFinanciallyApproved(claim))
+    && (claim.financialReview?.proposal.overlapKey ?? claim.overlapKey).trim().toLowerCase() === overlapKey.trim().toLowerCase())
+  if (duplicate) throw new Error(`This benefit scope is already reserved by "${duplicate.name}". Resolve the overlap before approval.`)
+}
+
+export function submitFinancialReview(study: StudyRecord, proposal: FinancialProposal, actor: string, claims: ValueClaim[], recordedAt = new Date().toISOString()): StudyRecord {
+  assertReviewableStudy(study)
+  if (study.financialReview?.status === 'Pending' || study.financialReview?.status === 'Approved') throw new Error('This study already has a pending or approved financial review.')
+  if (!actor.trim() || ![proposal.valuationFormula, proposal.valuationSource, proposal.overlapKey, proposal.policyVersion, proposal.assumptions].every((value) => value.trim())) {
+    throw new Error('Provide the preparer, valuation formula, source, benefit scope, policy version, and assumptions.')
+  }
+  if (!Number.isFinite(proposal.grossValue) || proposal.grossValue <= 0) throw new Error('Proposed gross value must be a positive, finite amount.')
+  if (!['Observed', 'Estimated', 'Modelled'].includes(proposal.valuationGrade) || !['High', 'Medium', 'Low'].includes(proposal.confidence)
+    || !['Improved Performance', 'Cost Savings', 'Innovation / Transformation', 'Risk Mitigation'].includes(proposal.pillar)) throw new Error('Choose valid valuation evidence, confidence, and a business-value pillar.')
+  if (proposal.overlapKey.endsWith('|unvalidated')) throw new Error('Replace the draft scope with a cohort, benefit mechanism, and period key.')
+  assertNoFinancialOverlap(study.id, proposal.overlapKey, claims)
+  const evidence = financialEvidence(study)
+  const submitted: FinancialReviewEvent = { action: 'Submitted', actor: actor.trim(), recordedAt, notes: proposal.assumptions, proposal: { ...proposal }, evidence }
+  return {
+    ...study,
+    stage: study.stage === 'Validated' || study.stage === 'Realized' ? 'Signal' : study.stage,
+    approvedBy: undefined,
+    realization: undefined,
+    financialReview: { status: 'Pending', proposal: { ...proposal }, evidence, history: [...(study.financialReview?.history ?? []), submitted] },
+  }
+}
+
+export function decideFinancialReview(study: StudyRecord, decision: 'Approved' | 'Rejected', input: FinancialDecision, claims: ValueClaim[], recordedAt = new Date().toISOString()): StudyRecord {
+  const review = study.financialReview
+  if (!review || review.status !== 'Pending') throw new Error('Only a pending financial review can be decided.')
+  if (!input.actor.trim() || !input.notes.trim()) throw new Error('Record the finance reviewer and decision rationale.')
+  if (decision === 'Approved') {
+    assertReviewableStudy(study)
+    if (!matchesFinancialEvidence(study, review.evidence)) throw new Error('Study evidence changed after submission. Return it for changes and resubmit.')
+    if (!input.evidenceChecked || !input.guardrailsChecked || !input.overlapChecked) throw new Error('Confirm attribution, guardrails, and claim/Pulse overlap checks before approval.')
+    if (review.proposal.pillar === 'Risk Mitigation' && !input.riskOwner.trim()) throw new Error('Risk mitigation requires a risk-owner sign-off reference.')
+    assertNoFinancialOverlap(study.id, review.proposal.overlapKey, claims)
+  }
+  const updatedReview: FinancialReview = {
+    ...review,
+    status: decision,
+    history: [...review.history, {
+      action: decision,
+      actor: input.actor.trim(),
+      recordedAt,
+      notes: input.notes.trim(),
+      riskOwner: input.riskOwner.trim() || undefined,
+      checks: { evidenceChecked: input.evidenceChecked, guardrailsChecked: input.guardrailsChecked, overlapChecked: input.overlapChecked },
+    }],
+  }
+  if (decision === 'Rejected') return { ...study, financialReview: updatedReview }
+  const { policyVersion: _policyVersion, assumptions: _assumptions, ...valuation } = review.proposal
+  return { ...study, ...valuation, stage: 'Validated', approvedBy: input.actor.trim(), financialReview: updatedReview }
+}
+
+export function recordFinancialRealization(study: StudyRecord, input: Omit<FinancialRealization, 'recordedAt'>, recordedAt = new Date().toISOString()): StudyRecord {
+  if (study.stage !== 'Validated' || !isFinanciallyApproved(study)) throw new Error('Only an approved Validated claim can be reconciled as Realized.')
+  if (!Number.isFinite(input.grossValue) || input.grossValue < 0) throw new Error('Realized gross value must be a non-negative, finite amount.')
+  if (![input.formula, input.source, input.actor, input.notes].every((value) => value.trim())) throw new Error('Provide the realized-value formula, reconciliation source, finance reviewer, and explanation of any variance.')
+  const realization = { ...input, recordedAt }
+  return {
+    ...study,
+    stage: 'Realized',
+    grossValue: input.grossValue,
+    valuationGrade: 'Observed',
+    valuationFormula: input.formula,
+    valuationSource: input.source,
+    approvedBy: input.actor,
+    realization,
+    financialReview: {
+      ...study.financialReview!,
+      history: [...study.financialReview!.history, { action: 'Realized', actor: input.actor, recordedAt, notes: input.notes, realization }],
+    },
+  }
+}
+
+function withDemoFinancialApproval<Claim extends ValueClaim>(claim: Claim): Claim {
+  if (!claim.approvedBy || !['Validated', 'Realized'].includes(claim.stage)) return claim
+  const recordedAt = '2026-07-15T12:00:00.000Z'
+  const proposal: FinancialProposal = {
+    pillar: claim.pillar,
+    grossValue: claim.grossValue,
+    valuationFormula: claim.valuationFormula!,
+    valuationSource: claim.valuationSource!,
+    valuationGrade: claim.valuationGrade!,
+    confidence: claim.confidence,
+    overlapKey: claim.overlapKey,
+    policyVersion: 'demo-claim-policy-v1',
+    assumptions: 'Fictional review of attribution, contribution value, quality, and claim/Pulse overlap. Not a customer approval.',
+  }
+  const evidence = financialEvidence(claim)
+  const history: FinancialReviewEvent[] = [
+    { action: 'Submitted', actor: 'Process owner (demo)', recordedAt, notes: proposal.assumptions, proposal, evidence },
+    {
+      action: 'Approved', actor: claim.approvedBy, recordedAt, notes: 'Fictional finance approval for demonstration only.',
+      checks: { evidenceChecked: true, guardrailsChecked: true, overlapChecked: true },
+      riskOwner: claim.pillar === 'Risk Mitigation' ? 'Risk committee review (demo)' : undefined,
+    },
+  ]
+  const realization: FinancialRealization | undefined = claim.stage === 'Realized'
+    ? { grossValue: claim.grossValue, formula: claim.valuationFormula!, source: claim.valuationSource!, actor: claim.approvedBy, notes: 'Fictional reconciliation to finance records.', recordedAt }
+    : undefined
+  if (realization) history.push({ action: 'Realized', actor: realization.actor, recordedAt, notes: realization.notes, realization })
+  return { ...claim, realization, financialReview: { status: 'Approved', proposal, evidence, history } }
+}
+
+const seedStudies: Study[] = [
   {
     id: 'developer-delivery',
+    hypothesisId: 1,
+    expectedEffect: 'Shorter development cycle',
+    outcome: 'Increase release throughput',
     name: 'Developer delivery cycle',
     team: 'Digital Channels',
     product: 'GitHub Copilot',
@@ -159,6 +432,9 @@ export const studies: Study[] = [
   },
   {
     id: 'knowledge-preparation',
+    hypothesisId: 2,
+    expectedEffect: 'Less preparation time',
+    outcome: 'Handle more cases per week',
     name: 'Knowledge work preparation',
     team: 'Customer Operations',
     product: 'Copilot Cowork',
@@ -180,6 +456,9 @@ export const studies: Study[] = [
   },
   {
     id: 'sales-proposal',
+    hypothesisId: 3,
+    expectedEffect: 'Faster response to clients',
+    outcome: 'Improve proposal conversion',
     name: 'Sales proposal response',
     team: 'Enterprise Sales',
     product: 'Copilot Cowork',
@@ -205,6 +484,20 @@ export const studies: Study[] = [
     icon: TrendingUp,
   },
 ]
+
+export const studies: Study[] = seedStudies.map(withDemoFinancialApproval)
+
+export function restoreStudyRecords(saved: StudyRecord[]): StudyRecord[] {
+  const restored = saved.map((record) => {
+    const seed = studies.find((study) => study.id === record.id)
+    if (!record.financialReview && seed?.financialReview) {
+      const migrated = { ...record, financialReview: seed.financialReview, realization: seed.realization }
+      if (isFinanciallyApproved(migrated)) return migrated
+    }
+    return record
+  })
+  return [...studies.filter((seed) => !restored.some((record) => record.id === seed.id)).map(({ icon: _icon, ...record }) => record), ...restored]
+}
 
 const additionalClaims: ValueClaim[] = [
   {
@@ -269,7 +562,7 @@ const additionalClaims: ValueClaim[] = [
   },
 ]
 
-export const valueClaims: ValueClaim[] = [...studies, ...additionalClaims]
+export const valueClaims: ValueClaim[] = [...studies, ...additionalClaims.map(withDemoFinancialApproval)]
 
 export const copilotSpend = 28460
 
@@ -337,12 +630,13 @@ export function calculatePortfolio(assumptions: Assumptions, claims: ValueClaim[
   const seenOverlapKeys = new Set<string>()
   const excludedDuplicates: ValueClaim[] = []
   const eligibleClaims = claims.filter((claim) => {
-    if (!validatedRoiStages.has(claim.stage) || claim.grossValue <= 0 || !claim.valuationGrade) return false
-    if (seenOverlapKeys.has(claim.overlapKey)) {
+    if (!validatedRoiStages.has(claim.stage) || claim.grossValue <= 0 || !claim.valuationGrade || !isFinanciallyApproved(claim)) return false
+    const overlapKey = claim.overlapKey.trim().toLowerCase()
+    if (seenOverlapKeys.has(overlapKey)) {
       excludedDuplicates.push(claim)
       return false
     }
-    seenOverlapKeys.add(claim.overlapKey)
+    seenOverlapKeys.add(overlapKey)
     return true
   })
 

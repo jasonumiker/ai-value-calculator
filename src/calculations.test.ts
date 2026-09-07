@@ -3,6 +3,7 @@ import {
   calculatePortfolio,
   combinePulseWithPortfolio,
   copilotSpend,
+  decideFinancialReview,
   defaultAssumptions,
   estimatePulseValue,
   formatCurrency,
@@ -10,6 +11,7 @@ import {
   formatShort,
   pulseProjectionPolicy,
   studies,
+  submitFinancialReview,
   summarizePulse,
   valueClaims,
   type Assumptions,
@@ -83,11 +85,27 @@ describe('Validated ROI eligibility', () => {
 
   it('prevents two eligible claims with the same cohort-period overlap key from being counted', () => {
     const original = valueClaims.find((claim) => claim.id === 'external-research-spend')!
-    const duplicate: ValueClaim = { ...original, id: 'duplicate', name: 'Duplicate claim', grossValue: 999999 }
+    const pending = submitFinancialReview(
+      { ...studies[0], id: 'duplicate', name: 'Duplicate claim', stage: 'Signal', financialReview: undefined },
+      { ...original.financialReview!.proposal, grossValue: 999999 },
+      'Process owner (demo)',
+      [],
+    )
+    const duplicate: ValueClaim = decideFinancialReview(pending, 'Approved', {
+      actor: 'Finance reviewer (demo)', notes: 'Independent approval before the conflicting claim was received.',
+      evidenceChecked: true, guardrailsChecked: true, overlapChecked: true, riskOwner: '',
+    }, [])
     const portfolio = calculatePortfolio(defaultAssumptions, [...valueClaims, duplicate])
     expect(portfolio.rawValue).toBe(132500)
     expect(portfolio.excludedDuplicates).toHaveLength(1)
     expect(portfolio.excludedDuplicates[0].id).toBe('duplicate')
+  })
+
+  it('requires a recorded financial approval rather than a declared stage or approver label', () => {
+    const declared = { ...studies[0], financialReview: undefined }
+    expect(calculatePortfolio(defaultAssumptions, [declared]).validatedValue).toBe(0)
+    const changed = { ...studies[0], grossValue: 999999 }
+    expect(calculatePortfolio(defaultAssumptions, [changed]).validatedValue).toBe(0)
   })
 })
 

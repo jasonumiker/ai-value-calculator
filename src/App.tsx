@@ -33,44 +33,40 @@ import {
   X,
 } from 'lucide-react'
 import './App.css'
+import FinancialReview from './FinancialReview'
 import {
   calculatePortfolio,
   combinePulseWithPortfolio,
   confidenceWeightKeys,
   copilotSpend,
+  createStudyFromHypothesis,
   defaultAssumptions,
   estimatePulseValue,
   evidenceWeightKeys,
   formatCurrency,
   formatPercent,
   formatShort,
+  getHypothesisStatus,
+  isFinanciallyApproved,
   pulseEffectOptions,
   pulseProjectionPolicy,
   resolveTimeImpactHours,
+  restoreStudyRecords,
   studies,
   summarizePulse,
   valueClaims,
   type Assumptions,
   type Confidence,
   type EvidenceGrade,
+  type Hypothesis,
   type Product,
   type ResponseRecord,
+  type StudyRecord,
+  type ValueClaim,
   type ValueStage,
 } from './model'
 
 type Page = 'overview' | 'responses' | 'hypotheses' | 'studies' | 'imports'
-
-type Hypothesis = {
-  id: number
-  useCase: string
-  owner: string
-  product: Product
-  expectedEffect: string
-  outcome: string
-  evidence: string
-  guardrail: string
-  status: 'Collecting' | 'Ready to test' | 'Validated'
-}
 
 type ImportRecord = {
   id: number
@@ -128,10 +124,10 @@ const pulseWorkTypeOptions = [
 ] as const
 
 const seedHypotheses: Hypothesis[] = [
-  { id: 1, useCase: 'Generate unit tests', owner: 'Digital Channels', product: 'GitHub Copilot', expectedEffect: 'Shorter development cycle', outcome: 'Increase release throughput', evidence: 'Pull request and deployment timestamps', guardrail: 'Escaped defects must not increase', status: 'Collecting' },
-  { id: 2, useCase: 'Summarize case material', owner: 'Customer Operations', product: 'Copilot Cowork', expectedEffect: 'Less preparation time', outcome: 'Handle more cases per week', evidence: 'Case-management throughput', guardrail: 'Case quality must remain stable', status: 'Ready to test' },
-  { id: 3, useCase: 'Draft sales proposals', owner: 'Enterprise Sales', product: 'Copilot Cowork', expectedEffect: 'Faster response to clients', outcome: 'Improve proposal conversion', evidence: 'CRM opportunity data', guardrail: 'Discounting and win rate monitored', status: 'Collecting' },
-  { id: 4, useCase: 'Accelerate code review', owner: 'Platform Engineering', product: 'GitHub Copilot', expectedEffect: 'Reduce review wait time', outcome: 'Deliver changes earlier', evidence: 'Pull request cycle time', guardrail: 'Change failure rate must not rise', status: 'Validated' },
+  { id: 1, useCase: 'Generate unit tests', owner: 'Digital Channels', product: 'GitHub Copilot', expectedEffect: 'Shorter development cycle', outcome: 'Increase release throughput', evidence: 'Pull request and deployment timestamps', guardrail: 'Escaped defects must not increase' },
+  { id: 2, useCase: 'Summarize case material', owner: 'Customer Operations', product: 'Copilot Cowork', expectedEffect: 'Less preparation time', outcome: 'Handle more cases per week', evidence: 'Case-management throughput', guardrail: 'Case quality must remain stable' },
+  { id: 3, useCase: 'Draft sales proposals', owner: 'Enterprise Sales', product: 'Copilot Cowork', expectedEffect: 'Faster response to clients', outcome: 'Improve proposal conversion', evidence: 'CRM opportunity data', guardrail: 'Discounting and win rate monitored' },
+  { id: 4, useCase: 'Accelerate code review', owner: 'Platform Engineering', product: 'GitHub Copilot', expectedEffect: 'Reduce review wait time', outcome: 'Deliver changes earlier', evidence: 'Pull request cycle time', guardrail: 'Change failure rate must not rise' },
 ]
 
 const initialImports: ImportRecord[] = [
@@ -174,7 +170,7 @@ function saveStored<T>(key: string, value: T) {
   localStorage.setItem(key, JSON.stringify(value))
 }
 
-const storageKeys = ['ai-value-calculator-responses', 'ai-value-calculator-hypotheses', 'ai-value-calculator-imports', 'ai-value-calculator-assumptions']
+const storageKeys = ['ai-value-calculator-responses', 'ai-value-calculator-hypotheses', 'ai-value-calculator-studies', 'ai-value-calculator-imports', 'ai-value-calculator-assumptions']
 const storageVersion = '4'
 
 function ensureStorageVersion() {
@@ -222,19 +218,103 @@ function App() {
   const [menuOpen, setMenuOpen] = useState(false)
   const [surveyOpen, setSurveyOpen] = useState(false)
   const [hypothesisOpen, setHypothesisOpen] = useState(false)
+  const [selectedHypothesisId, setSelectedHypothesisId] = useState<number | null>(null)
+  const [selectedStudyId, setSelectedStudyId] = useState<string | null>(null)
+  const [editingStudy, setEditingStudy] = useState<StudyRecord | null>(null)
+  const [reviewingStudy, setReviewingStudy] = useState<StudyRecord | null>(null)
+  const [studyError, setStudyError] = useState('')
   const [notice, setNotice] = useState('')
   const [responses, setResponses] = useState<ResponseRecord[]>(() => readStored('ai-value-calculator-responses', seedResponses))
   const [hypotheses, setHypotheses] = useState<Hypothesis[]>(() => readStored('ai-value-calculator-hypotheses', seedHypotheses))
+  const [studyRecords, setStudyRecords] = useState<StudyRecord[]>(() => {
+    const saved = readStored<StudyRecord[]>('ai-value-calculator-studies', [])
+    return restoreStudyRecords(Array.isArray(saved) ? saved : [])
+  })
   const [imports, setImports] = useState<ImportRecord[]>(() => readStored('ai-value-calculator-imports', initialImports))
   const [assumptions, setAssumptions] = useState<Assumptions>(() => ({ ...defaultAssumptions, ...readStored('ai-value-calculator-assumptions', defaultAssumptions) }))
   const fileInput = useRef<HTMLInputElement>(null)
-  const portfolio = calculatePortfolio(assumptions)
+  const claims: ValueClaim[] = [...studyRecords, ...valueClaims.filter((claim) => !studies.some((study) => study.id === claim.id))]
+  const portfolio = calculatePortfolio(assumptions, claims)
   const pulseProjection = estimatePulseValue(responses)
   const pulseInclusive = combinePulseWithPortfolio(portfolio.validatedValue, portfolio.totalCost, pulseProjection)
 
   const navigate = (next: Page) => {
     setPage(next)
     setMenuOpen(false)
+    setSelectedHypothesisId(null)
+    setSelectedStudyId(null)
+  }
+
+  const viewStudy = (studyId: string) => {
+    navigate('studies')
+    setSelectedStudyId(studyId)
+  }
+
+  const viewHypothesis = (hypothesisId: number) => {
+    navigate('hypotheses')
+    setSelectedHypothesisId(hypothesisId)
+  }
+
+  const startStudy = (hypothesis: Hypothesis) => {
+    const existing = studyRecords.find((study) => study.hypothesisId === hypothesis.id)
+    if (existing) {
+      viewStudy(existing.id)
+      return
+    }
+    const study = createStudyFromHypothesis(hypothesis)
+    const updated = [study, ...studyRecords]
+    setStudyRecords(updated)
+    saveStored('ai-value-calculator-studies', updated)
+    viewStudy(study.id)
+  }
+
+  const saveStudyEvidence = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!editingStudy || editingStudy.financialReview?.status === 'Pending' || editingStudy.financialReview?.status === 'Approved') return
+    const data = new FormData(event.currentTarget)
+    const field = (name: string) => String(data.get(name) ?? '').trim()
+    const progress = Number(data.get('progress'))
+    if (!['cohort', 'period', 'metric', 'operationalSource'].every((name) => field(name))) {
+      setStudyError('Enter a cohort, period, metric, and evidence source.')
+      return
+    }
+    if (!Number.isInteger(progress) || progress < 0 || progress > 100) {
+      setStudyError('Progress must be a whole number from 0 to 100.')
+      return
+    }
+    if (progress === 100 && (!field('baseline') || !field('comparison') || !field('result'))) {
+      setStudyError('A completed study needs a baseline, comparison, and observed result, including a null or negative result.')
+      return
+    }
+    const updatedStudy: StudyRecord = {
+      ...editingStudy,
+      cohort: field('cohort'),
+      period: field('period'),
+      metric: field('metric'),
+      operationalSource: field('operationalSource'),
+      baseline: field('baseline'),
+      current: field('current'),
+      comparison: field('comparison'),
+      result: field('result') || 'Not measured yet',
+      operationalGrade: field('operationalGrade') as EvidenceGrade,
+      progress,
+    }
+    const updated = studyRecords.map((study) => study.id === updatedStudy.id ? updatedStudy : study)
+    setStudyRecords(updated)
+    saveStored('ai-value-calculator-studies', updated)
+    setEditingStudy(null)
+    showNotice('Study evidence saved; financial stage unchanged.')
+  }
+
+  const saveFinancialReview = (updatedStudy: StudyRecord) => {
+    const updated = studyRecords.map((study) => study.id === updatedStudy.id ? updatedStudy : study)
+    setStudyRecords(updated)
+    saveStored('ai-value-calculator-studies', updated)
+    setReviewingStudy(null)
+    const action = updatedStudy.financialReview?.history.at(-1)?.action
+    showNotice(action === 'Submitted' ? 'Valuation submitted for financial review; ROI unchanged.'
+      : action === 'Rejected' ? 'Valuation returned for changes; no approved value added.'
+        : action === 'Realized' ? 'Realized value reconciled; portfolio updated.' : 'Financial approval recorded; portfolio updated.')
   }
 
   const showNotice = (message: string) => {
@@ -256,7 +336,8 @@ function App() {
   const exportPortfolio = () => {
     const snapshot = {
       classification: 'ILLUSTRATIVE_DEMO_DATA_NOT_CUSTOMER_RESULTS',
-      methodologyVersion: 'ai-value-calculator-v4-dual-roi',
+      methodologyVersion: 'ai-value-calculator-v5-financial-review',
+      approvalControl: 'Local demo workflow; reviewer identities are self-declared and records are not tamper-proof.',
       exportedAt: new Date().toISOString(),
       assumptions,
       portfolio,
@@ -282,7 +363,12 @@ function App() {
         },
       },
       responses,
-      hypotheses,
+      hypotheses: hypotheses.map((hypothesis) => ({
+        ...hypothesis,
+        status: getHypothesisStatus(hypothesis.id, studyRecords),
+        studyId: studyRecords.find((study) => study.hypothesisId === hypothesis.id)?.id ?? null,
+      })),
+      studies: studyRecords,
       imports,
     }
     downloadBlob(`ai-value-calculator-demo-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify(snapshot, null, 2), 'application/json')
@@ -321,11 +407,11 @@ function App() {
       outcome: String(data.get('outcome')),
       evidence: String(data.get('evidence')),
       guardrail: String(data.get('guardrail')),
-      status: 'Collecting',
     }
     const updated = [next, ...hypotheses]
     setHypotheses(updated)
     saveStored('ai-value-calculator-hypotheses', updated)
+    setSelectedHypothesisId(null)
     setHypothesisOpen(false)
     showNotice('Value hypothesis and guardrail added.')
   }
@@ -390,16 +476,18 @@ function App() {
         <div className="header-actions"><button className="secondary-button desktop-action" onClick={exportPortfolio}><Download size={16} /> Export</button><button className="primary-button" onClick={() => setSurveyOpen(true)}><Send size={16} /> Preview pulse</button></div>
       </header>
       <div className="demo-banner" role="note"><AlertTriangle size={16} /><strong>Illustrative demo data</strong><span>Not customer results. Values, studies, approvals, and organizations are fictional.</span></div>
-      {page === 'overview' && <Overview onNavigate={navigate} responses={responses} assumptions={assumptions} onAssumptionChange={updateAssumption} onResetAssumptions={resetAssumptions} />}
+      {page === 'overview' && <Overview onNavigate={navigate} responses={responses} assumptions={assumptions} claims={claims} onAssumptionChange={updateAssumption} onResetAssumptions={resetAssumptions} />}
       {page === 'responses' && <Responses responses={responses} onOpenSurvey={() => setSurveyOpen(true)} />}
-      {page === 'hypotheses' && <Hypotheses hypotheses={hypotheses} onOpen={() => setHypothesisOpen(true)} />}
-      {page === 'studies' && <Studies />}
+      {page === 'hypotheses' && <Hypotheses hypotheses={hypotheses} studyRecords={studyRecords} selectedId={selectedHypothesisId} onClearSelection={() => setSelectedHypothesisId(null)} onOpen={() => setHypothesisOpen(true)} onStartStudy={startStudy} onViewStudy={viewStudy} />}
+      {page === 'studies' && <Studies records={studyRecords} hypotheses={hypotheses} claims={claims} assumptions={assumptions} selectedId={selectedStudyId} onClearSelection={() => setSelectedStudyId(null)} onViewHypothesis={viewHypothesis} onEdit={(study) => { setStudyError(''); setEditingStudy(study) }} onReview={setReviewingStudy} />}
       {page === 'imports' && <Imports imports={imports} fileInput={fileInput} onImport={importCsv} />}
     </main>
     {menuOpen && <button className="sidebar-scrim" aria-label="Close navigation" onClick={() => setMenuOpen(false)} />}
     {notice && <div className="toast"><Check size={17} />{notice}</div>}
     {surveyOpen && <SurveyModal onClose={() => setSurveyOpen(false)} onSubmit={submitSurvey} />}
     {hypothesisOpen && <HypothesisModal onClose={() => setHypothesisOpen(false)} onSubmit={submitHypothesis} />}
+    {editingStudy && <StudyModal study={editingStudy} error={studyError} onClose={() => setEditingStudy(null)} onSubmit={saveStudyEvidence} />}
+    {reviewingStudy && <ModalShell title="Financial review" eyebrow={reviewingStudy.name} className="financial-modal" onClose={() => setReviewingStudy(null)}><FinancialReview study={reviewingStudy} claims={claims} onSave={saveFinancialReview} /></ModalShell>}
   </div>
 }
 
@@ -407,18 +495,20 @@ function Overview({
   onNavigate,
   responses,
   assumptions,
+  claims,
   onAssumptionChange,
   onResetAssumptions,
 }: {
   onNavigate: (page: Page) => void
   responses: ResponseRecord[]
   assumptions: Assumptions
+  claims: ValueClaim[]
   onAssumptionChange: (key: keyof Assumptions, value: number) => void
   onResetAssumptions: () => void
 }) {
   const [teamQuery, setTeamQuery] = useState('')
   const [policyLocked, setPolicyLocked] = useState(true)
-  const portfolio = calculatePortfolio(assumptions)
+  const portfolio = calculatePortfolio(assumptions, claims)
   const pulse = summarizePulse(responses)
   const pulseProjection = estimatePulseValue(responses)
   const pulseInclusive = combinePulseWithPortfolio(portfolio.validatedValue, portfolio.totalCost, pulseProjection)
@@ -430,7 +520,7 @@ function Overview({
     const totalCost = team.licenseCost + nonLicenseCost * team.changeCostShare
     const roi = totalCost === 0 ? 0 : (adjustedValue - totalCost) / totalCost
     const eligibleClaim = portfolio.contributions.find((claim) => claim.team === team.team)
-    const pipelineClaim = valueClaims.find((claim) => claim.team === team.team)
+    const pipelineClaim = claims.find((claim) => claim.team === team.team)
     return { ...team, adjustedValue, totalCost, roi, stage: eligibleClaim?.stage ?? pipelineClaim?.stage }
   }).filter((row) => row.team.toLowerCase().includes(teamQuery.trim().toLowerCase()))
 
@@ -573,25 +663,77 @@ function Responses({ responses, onOpenSurvey }: { responses: ResponseRecord[]; o
   </div>
 }
 
-function Hypotheses({ hypotheses, onOpen }: { hypotheses: Hypothesis[]; onOpen: () => void }) {
-  return <div className="page-content"><PageIntro kicker="Quarterly value planning" title="Connect AI use to an outcome before measuring it" text="Hypothesis status tracks study workflow, not ROI eligibility. Only resulting claims at the Validated or Realized value stage can enter Validated ROI; Pulse projection remains a separate random-sample path." action={<button className="primary-button" onClick={onOpen}><Plus size={17} /> Add hypothesis</button>} /><section className="hypothesis-grid">{hypotheses.map((item) => <article className="hypothesis-card" key={item.id}><div className="hypothesis-top"><span className="product-chip"><ProductMark product={item.product} />{item.product}</span><button className="icon-button" aria-label={`More options for ${item.useCase}`}><MoreHorizontal size={18} /></button></div><h3>{item.useCase}</h3><p className="owner"><Users size={15} />{item.owner}</p><div className="hypothesis-flow"><div><span>Expected work effect</span><strong>{item.expectedEffect}</strong></div><ArrowRight size={18} /><div><span>Operational outcome</span><strong>{item.outcome}</strong></div></div><div className="evidence-source"><Database size={15} /><div><span>Operational source</span><strong>{item.evidence}</strong></div></div><div className="guardrail-row"><ShieldCheck size={15} /><div><span>Guardrail</span><strong>{item.guardrail}</strong></div></div><div className="card-footer"><span className={`status-pill ${item.status.toLowerCase().replaceAll(' ', '-')}`}><span />{item.status}</span></div></article>)}</section></div>
+function Hypotheses({ hypotheses, studyRecords, selectedId, onClearSelection, onOpen, onStartStudy, onViewStudy }: {
+  hypotheses: Hypothesis[]
+  studyRecords: StudyRecord[]
+  selectedId: number | null
+  onClearSelection: () => void
+  onOpen: () => void
+  onStartStudy: (hypothesis: Hypothesis) => void
+  onViewStudy: (studyId: string) => void
+}) {
+  const visible = hypotheses.filter((hypothesis) => selectedId === null || hypothesis.id === selectedId)
+  return <div className="page-content">
+    <PageIntro kicker="Quarterly value planning" title="Connect AI use to an outcome before measuring it" text="Workflow progress follows the linked outcome study. Financial eligibility remains a separate evidence and approval decision." action={<div className="workflow-actions">{selectedId !== null && <button className="secondary-button" onClick={onClearSelection}><LayoutDashboard size={16} /> All hypotheses</button>}<button className="primary-button" onClick={onOpen}><Plus size={17} /> Add hypothesis</button></div>} />
+    <section className={`hypothesis-grid ${selectedId !== null ? 'focused-hypothesis' : ''}`}>{visible.map((item) => {
+      const study = studyRecords.find((record) => record.hypothesisId === item.id)
+      const status = getHypothesisStatus(item.id, studyRecords)
+      return <article className="hypothesis-card" aria-labelledby={`hypothesis-title-${item.id}`} key={item.id}>
+        <div className="hypothesis-top"><span className="product-chip"><ProductMark product={item.product} />{item.product}</span></div>
+        <h3 id={`hypothesis-title-${item.id}`}>{item.useCase}</h3>
+        <p className="owner"><Users size={15} />{item.owner}</p>
+        <div className="hypothesis-flow"><div><span>Expected work effect</span><strong>{item.expectedEffect}</strong></div><ArrowRight size={18} /><div><span>Operational outcome</span><strong>{item.outcome}</strong></div></div>
+        <div className="evidence-source"><Database size={15} /><div><span>Operational source</span><strong>{item.evidence}</strong></div></div>
+        <div className="guardrail-row"><ShieldCheck size={15} /><div><span>Guardrail</span><strong>{item.guardrail}</strong></div></div>
+        {study && <div className="linked-study"><span>Outcome study</span><strong>{study.name}</strong><StageBadge stage={study.stage} /></div>}
+        <div className="card-footer"><span className={`status-pill ${status.toLowerCase().replaceAll(' ', '-')}`}><span />{status}</span>{study
+          ? <button onClick={() => onViewStudy(study.id)}><FlaskConical size={15} /> View study <ArrowRight size={15} /></button>
+          : <button onClick={() => onStartStudy(item)}><FlaskConical size={15} /> Start study <ArrowRight size={15} /></button>}</div>
+      </article>
+    })}</section>
+  </div>
 }
 
-function Studies() {
-  const ordered = [...studies].sort((a, b) => b.progress - a.progress)
-  const validatedRoiClaimIds = new Set(calculatePortfolio(defaultAssumptions).contributions.map((claim) => claim.id))
+function Studies({ records, hypotheses, claims, assumptions, selectedId, onClearSelection, onViewHypothesis, onEdit, onReview }: {
+  records: StudyRecord[]
+  hypotheses: Hypothesis[]
+  claims: ValueClaim[]
+  assumptions: Assumptions
+  selectedId: string | null
+  onClearSelection: () => void
+  onViewHypothesis: (hypothesisId: number) => void
+  onEdit: (study: StudyRecord) => void
+  onReview: (study: StudyRecord) => void
+}) {
+  const [pendingOnly, setPendingOnly] = useState(false)
+  const ordered = records.filter((study) => selectedId !== null ? study.id === selectedId : !pendingOnly || study.financialReview?.status === 'Pending').sort((first, second) => second.progress - first.progress)
+  const visibleClaims = claims.filter((claim) => selectedId === null || claim.id === selectedId)
+  const validatedRoiClaimIds = new Set(calculatePortfolio(assumptions, claims).contributions.map((claim) => claim.id))
   return <div className="page-content">
-    <PageIntro kicker="Incremental-effect evidence" title="Focused studies for the claims that matter most" text="Matched, pre/post, or staggered studies support the claim-backed Validated ROI path. The Pulse-inclusive projection remains separate, and null or negative results are retained in both paths." />
-    <section className="study-grid">{ordered.map(({ icon: Icon, ...study }) => <article className="study-card" key={study.id}>
-      <div className="study-heading"><div className="study-icon"><Icon size={21} /></div><div><span className="product-chip"><ProductMark product={study.product} />{study.product}</span><h3>{study.name}</h3></div><StageBadge stage={study.stage} /></div>
-      <div className="study-design"><FlaskConical size={16} /><span>{study.cohort}</span></div>
+    <PageIntro kicker="Incremental-effect evidence" title="Focused studies for the claims that matter most" text="Matched, pre/post, or staggered studies support the claim-backed Validated ROI path. The Pulse-inclusive projection remains separate, and null or negative results are retained in both paths." action={selectedId !== null ? <button className="secondary-button" onClick={onClearSelection}><LayoutDashboard size={16} /> All studies</button> : undefined} />
+    {selectedId === null && <div className="finance-filter"><label><input type="checkbox" checked={pendingOnly} onChange={(event) => setPendingOnly(event.target.checked)} />Pending financial reviews ({records.filter((study) => study.financialReview?.status === 'Pending').length})</label></div>}
+    {ordered.length === 0 && <p className="finance-empty">No studies awaiting financial review.</p>}
+    <section className={`study-grid ${selectedId !== null ? 'focused-study' : ''}`}>{ordered.map((study) => {
+      const Icon = studies.find((seed) => seed.id === study.id)?.icon ?? FlaskConical
+      const origin = hypotheses.find((hypothesis) => hypothesis.id === study.hypothesisId)
+      const reviewStatus = study.financialReview?.status
+      const approved = isFinanciallyApproved(study)
+      return <article className="study-card" aria-labelledby={`study-title-${study.id}`} key={study.id}>
+      <div className="study-heading"><div className="study-icon"><Icon size={21} /></div><div><span className="product-chip"><ProductMark product={study.product} />{study.product}</span><h3 id={`study-title-${study.id}`}>{study.name}</h3></div><StageBadge stage={study.stage} /></div>
+      <div className="study-origin"><span>Originating hypothesis</span>{origin ? <button className="text-button" onClick={() => onViewHypothesis(origin.id)}><Lightbulb size={14} />{origin.useCase}<ArrowRight size={14} /></button> : <strong>Original hypothesis unavailable</strong>}</div>
+      <div className="study-design"><FlaskConical size={16} /><span>{study.cohort || 'Cohort not set'}</span></div>
       <div className="study-result"><span>{study.metric}</span><strong>{study.result}</strong>{study.baseline && study.current ? <div className="study-baseline"><span className="baseline-from">{study.baseline}</span><ArrowRight size={13} /><span className="baseline-to">{study.current}</span></div> : <span className="no-baseline">Baseline incomplete</span>}{study.comparison && <div className="study-comparison"><span>Basis</span>{study.comparison}</div>}</div>
       <div className="study-progress"><div><i style={{ width: `${study.progress}%` }} /></div><span>{study.progress === 100 ? 'Study complete' : `${study.progress}% data collected`}</span></div>
-      <div className="study-provenance"><div><span>Operational source</span><strong>{study.operationalSource}</strong></div><div><span>Guardrail</span><strong>{study.guardrail}</strong></div>{study.valuationFormula && <div><span>Valuation formula</span><strong>{study.valuationFormula}</strong></div>}</div>
+      <div className="study-provenance">{study.expectedEffect && <div><span>Expected work effect</span><strong>{study.expectedEffect}</strong></div>}{study.outcome && <div><span>Target operational outcome</span><strong>{study.outcome}</strong></div>}<div><span>Period</span><strong>{study.period || 'Period not set'}</strong></div><div><span>Operational source</span><strong>{study.operationalSource}</strong></div><div><span>Guardrail</span><strong>{study.guardrail}</strong></div>{study.valuationFormula && <div><span>Valuation formula</span><strong>{study.valuationFormula}</strong></div>}</div>
       <div className="study-footer"><EvidenceBadge grade={study.operationalGrade} prefix="Outcome: " />{study.valuationGrade && <EvidenceBadge grade={study.valuationGrade} prefix="Value: " />}<span className={`confidence-pill ${study.confidence.toLowerCase()}`}>{study.confidence}</span><span className="study-value">{validatedRoiClaimIds.has(study.id) ? `${formatCurrency(study.grossValue)} gross · eligible for Validated ROI` : study.capacityHours ? `${study.capacityHours} h capacity · excluded from Validated ROI` : `${formatCurrency(study.grossValue)} potential · excluded from Validated ROI`}</span></div>
-    </article>)}</section>
+      <div className="study-finance"><span className={`finance-status ${(reviewStatus ?? 'unsubmitted').toLowerCase()}`}>{reviewStatus === 'Pending' ? 'Pending financial review' : reviewStatus === 'Rejected' ? 'Changes requested' : approved ? study.stage === 'Realized' ? 'Reconciled' : 'Financially approved' : 'Not financially approved'}</span>{study.approvedBy && approved && <span>{study.approvedBy}</span>}</div>
+      <div className="study-actions">
+        {reviewStatus !== 'Pending' && reviewStatus !== 'Approved' && <button className="secondary-button" onClick={() => onEdit(study)}><FileSpreadsheet size={15} /> Record evidence</button>}
+        <button className={reviewStatus === 'Pending' ? 'primary-button' : 'secondary-button'} disabled={!study.financialReview && study.progress !== 100} title={!study.financialReview && study.progress !== 100 ? 'Complete the study before preparing a valuation' : undefined} onClick={() => onReview(study)}><CircleDollarSign size={15} />{reviewStatus === 'Pending' ? 'Review valuation' : reviewStatus === 'Approved' ? 'View approval' : 'Prepare valuation'}</button>
+      </div>
+    </article>})}</section>
     <section className="methodology-note"><ShieldCheck size={22} /><div><strong>Validated ROI guardrail</strong><p>Claims need a baseline, comparison, stable metric definitions, quality guardrails, a transparent valuation source, finance approval, positive gross value, and a unique overlap key before entering Validated ROI. Completing a study does not guarantee eligibility or a positive result.</p></div></section>
-    <section className="panel claim-register"><div className="panel-header"><div><p className="section-kicker">Auditable claims register</p><h2>Every claim, including those excluded from Validated ROI</h2></div><span className="response-count">Overlap keys prevent double counting</span></div><div className="table-scroll"><table><thead><tr><th>Claim</th><th>Stage</th><th>Outcome evidence</th><th>Valuation evidence</th><th>Formula and source</th><th>Validated ROI</th><th>Approval</th></tr></thead><tbody>{valueClaims.map((claim) => { const eligible = validatedRoiClaimIds.has(claim.id); return <tr key={claim.id}><td><strong>{claim.name}</strong><span className="cell-subtitle">{claim.period} · {claim.overlapKey}</span></td><td><StageBadge stage={claim.stage} /></td><td><EvidenceBadge grade={claim.operationalGrade} /></td><td>{claim.valuationGrade ? <EvidenceBadge grade={claim.valuationGrade} /> : 'Not valued'}</td><td className="formula-cell">{claim.valuationFormula ?? 'Operational discovery only'}{claim.valuationSource && <span className="cell-subtitle">Source: {claim.valuationSource}</span>}</td><td>{eligible ? <span className="eligibility yes"><Check size={12} />Eligible</span> : <span className="eligibility">Excluded</span>}</td><td>{claim.approvedBy ?? 'Not approved'}</td></tr> })}</tbody></table></div></section>
+    <section className="panel claim-register"><div className="panel-header"><div><p className="section-kicker">Auditable claims register</p><h2>{selectedId !== null ? 'Linked study claim' : 'Every claim, including those excluded from Validated ROI'}</h2></div><span className="response-count">Overlap keys prevent double counting</span></div><div className="table-scroll"><table><thead><tr><th>Claim</th><th>Stage</th><th>Outcome evidence</th><th>Valuation evidence</th><th>Formula and source</th><th>Validated ROI</th><th>Approval</th></tr></thead><tbody>{visibleClaims.map((claim) => { const eligible = validatedRoiClaimIds.has(claim.id); return <tr key={claim.id}><td><strong>{claim.name}</strong><span className="cell-subtitle">{claim.period || 'Period not set'} · {claim.overlapKey}</span></td><td><StageBadge stage={claim.stage} /></td><td><EvidenceBadge grade={claim.operationalGrade} /></td><td>{claim.valuationGrade ? <EvidenceBadge grade={claim.valuationGrade} /> : 'Not valued'}</td><td className="formula-cell">{claim.valuationFormula ?? 'Operational discovery only'}{claim.valuationSource && <span className="cell-subtitle">Source: {claim.valuationSource}</span>}</td><td>{eligible ? <span className="eligibility yes"><Check size={12} />Eligible</span> : <span className="eligibility">Excluded</span>}</td><td>{claim.approvedBy ?? 'Not approved'}</td></tr> })}</tbody></table></div></section>
   </div>
 }
 
@@ -607,8 +749,8 @@ function PageIntro({ kicker, title, text, action }: { kicker: string; title: str
   return <section className="page-intro"><div><p className="section-kicker">{kicker}</p><h2>{title}</h2><p>{text}</p></div>{action}</section>
 }
 
-function ModalShell({ title, eyebrow, onClose, children }: { title: string; eyebrow: string; onClose: () => void; children: ReactNode }) {
-  return <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}><div className="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title"><div className="modal-header"><div><p className="section-kicker">{eyebrow}</p><h2 id="modal-title">{title}</h2></div><button className="icon-button" onClick={onClose} aria-label="Close"><X size={20} /></button></div>{children}</div></div>
+function ModalShell({ title, eyebrow, onClose, children, className = '' }: { title: string; eyebrow: string; onClose: () => void; children: ReactNode; className?: string }) {
+  return <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}><div className={`modal ${className}`} role="dialog" aria-modal="true" aria-labelledby="modal-title"><div className="modal-header"><div><p className="section-kicker">{eyebrow}</p><h2 id="modal-title">{title}</h2></div><button className="icon-button" onClick={onClose} aria-label="Close"><X size={20} /></button></div>{children}</div></div>
 }
 
 function SurveyModal({ onClose, onSubmit }: { onClose: () => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void }) {
@@ -685,6 +827,28 @@ function SurveyModal({ onClose, onSubmit }: { onClose: () => void; onSubmit: (ev
       <label>What was the main immediate effect?<select name="effect" required defaultValue=""><option value="" disabled>Select an effect</option>{pulseEffectOptions.map((effect) => <option key={effect}>{effect}</option>)}</select></label>
       <div className="pulse-disclaimer"><Info size={15} /><span>This convenience preview is discovery-only. It enters neither Validated ROI nor the governed Pulse-inclusive projection; only responses carrying the registered random-frame ID are projected.</span></div>
       <div className="modal-actions"><span><ShieldCheck size={15} />Grouped reporting only</span><button type="button" className="secondary-button" onClick={onClose}>Skip</button><button className="primary-button" type="submit">Record pulse <ArrowRight size={16} /></button></div>
+    </form>
+  </ModalShell>
+}
+
+function StudyModal({ study, error, onClose, onSubmit }: {
+  study: StudyRecord
+  error: string
+  onClose: () => void
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void
+}) {
+  return <ModalShell eyebrow={study.name} title="Record study evidence" onClose={onClose}>
+    <form onSubmit={onSubmit} className="modal-form">
+      <div className="form-row"><label>Study cohort<input name="cohort" required defaultValue={study.cohort} /></label><label>Study period<input name="period" required defaultValue={study.period} placeholder="e.g. Q3 2026" /></label></div>
+      <label>Outcome metric<input name="metric" required defaultValue={study.metric} /></label>
+      <label>Operational evidence source<input name="operationalSource" required defaultValue={study.operationalSource} /></label>
+      <div className="form-row"><label>Baseline<input name="baseline" defaultValue={study.baseline} /></label><label>Current measurement<input name="current" defaultValue={study.current} /></label></div>
+      <label>Comparison method<input name="comparison" defaultValue={study.comparison} /></label>
+      <label>Observed result<input name="result" defaultValue={study.result === 'Not measured yet' ? '' : study.result} /></label>
+      <div className="form-row"><label>Outcome evidence<select name="operationalGrade" defaultValue={study.operationalGrade}>{(Object.keys(evidenceWeightKeys) as EvidenceGrade[]).map((grade) => <option key={grade}>{grade}</option>)}</select></label><label>Study progress (%)<input name="progress" type="number" min="0" max="100" step="1" required defaultValue={study.progress} /></label></div>
+      <div className="guardrail-row"><ShieldCheck size={15} /><div><span>Original guardrail</span><strong>{study.guardrail}</strong></div></div>
+      {error && <p className="study-error" role="alert">{error}</p>}
+      <div className="modal-actions"><span><StageBadge stage={study.stage} />Not financially validated</span><button type="button" className="secondary-button" onClick={onClose}>Cancel</button><button className="primary-button" type="submit"><Check size={16} /> Save evidence</button></div>
     </form>
   </ModalShell>
 }
