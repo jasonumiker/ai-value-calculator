@@ -3,399 +3,289 @@ import { fireEvent } from '@testing-library/dom'
 import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import App from './App'
-import { createStudyFromHypothesis, defaultAssumptions, submitFinancialReview } from './model'
+import { DATA_KEY } from './state/storage'
 
 beforeEach(() => {
   localStorage.clear()
 })
 
-function summaryMetric(label: string): string {
+function summaryMetric(label: string) {
   const strip = document.querySelector('.summary-strip') as HTMLElement
-  const strong = within(strip).getByText(label).closest('.metric')!.querySelector('strong')!
-  return strong.textContent ?? ''
+  return within(strip).getByText(label).closest('.metric')!.querySelector('strong')!.textContent ?? ''
 }
 
-function storedAssumptions() {
-  return JSON.parse(localStorage.getItem('ai-value-calculator-assumptions') ?? '{}')
+const stored = () => JSON.parse(localStorage.getItem(DATA_KEY) ?? '{}')
+const nav = () => within(screen.getByRole('navigation', { name: 'Primary navigation' }))
+const persona = (name: string) => screen.getByRole('button', { name, pressed: false })
+
+async function lastSnapshot() {
+  const blob = vi.mocked(URL.createObjectURL).mock.calls.at(-1)?.[0] as Blob
+  return JSON.parse(await blob.text())
 }
 
-describe('Portfolio overview', () => {
-  it('clearly labels demo data and renders decision-grade metrics', () => {
-    render(<App />)
-    expect(screen.getByText('Illustrative demo data')).toBeInTheDocument()
-    expect(screen.getByText(/Not customer results/)).toBeInTheDocument()
-    expect(summaryMetric('Total AI investment')).toBe('$61,460')
-    expect(summaryMetric('Validated claim value')).toBe('$99,900')
-    expect(summaryMetric('Validated ROI')).toBe('63%')
-    expect(Number(summaryMetric('Pulse-inclusive ROI').replace('%', ''))).toBeGreaterThan(63)
-    expect(within(document.querySelector('.summary-strip') as HTMLElement).getByText(/95% Pulse sampling interval/i)).toBeInTheDocument()
-  })
-
-  it('shows four pillars without assigning financial value to unvalidated innovation', () => {
-    render(<App />)
-    ;['Improved Performance', 'Cost Savings', 'Innovation / Transformation', 'Risk Mitigation'].forEach((pillar) => {
-      expect(screen.getAllByText(pillar).length).toBeGreaterThan(0)
-    })
-    expect(screen.getByText('Not valued')).toBeInTheDocument()
-    expect(screen.getByText(/modelled value from/i)).toBeInTheDocument()
-    expect(screen.getByText(/added only to Pulse-inclusive ROI/i)).toBeInTheDocument()
-  })
-})
-
-describe('Governed valuation policy', () => {
-  it('includes three total-cost controls and seven locked evidence controls', () => {
-    render(<App />)
-    expect(screen.getAllByRole('slider')).toHaveLength(10)
-    expect(screen.getByLabelText('Implementation cost')).toBeEnabled()
-    expect(screen.getByLabelText('Modelled weight')).toBeDisabled()
-  })
-
-  it('requires an explicit unlock, recomputes ROI, persists changes, and resets', async () => {
+describe('Finance and executive portfolio', () => {
+  it('shows period-aligned costs, both ROI views, and switches quarters', async () => {
     const user = userEvent.setup()
     render(<App />)
-    const roiBefore = Number(summaryMetric('Validated ROI').replace('%', ''))
+    expect(screen.getByText('Illustrative demo data')).toBeInTheDocument()
+    expect(summaryMetric('Total AI cost')).toBe('$45,838')
+    expect(summaryMetric('Validated value')).toBe('$66,480')
+    expect(summaryMetric('Validated ROI')).toBe('45%')
+    expect(summaryMetric('Pulse-inclusive ROI')).toBe('150%')
+    expect(screen.getByText(/95% sampling interval 89% to 210%/)).toBeInTheDocument()
+    expect(screen.getByText('Is the next credit worth it? Cost vs modelled value per task session')).toBeInTheDocument()
+    expect(screen.getAllByText('Not worth it').length).toBeGreaterThan(0)
 
-    await user.click(screen.getByRole('button', { name: 'Claim weights locked' }))
-    expect(screen.getByLabelText('Modelled weight')).toBeEnabled()
-    fireEvent.change(screen.getByLabelText('Modelled weight'), { target: { value: '25' } })
-    expect(storedAssumptions().modelledWeight).toBe(0.25)
-    const roiAfter = Number(summaryMetric('Validated ROI').replace('%', ''))
-    expect(roiAfter).toBeLessThan(roiBefore)
-
-    await user.click(screen.getByRole('button', { name: 'Reset costs & claim policy' }))
-    expect(storedAssumptions().modelledWeight).toBe(defaultAssumptions.modelledWeight)
+    await user.selectOptions(screen.getByLabelText('Reporting quarter'), '2026-Q2')
+    expect(summaryMetric('Total AI cost')).toBe('$58,570')
+    expect(summaryMetric('Validated ROI')).toBe('−39%')
   })
 
-  it('exports an explicitly classified snapshot', async () => {
+  it('edits change costs for the selected quarter only', () => {
+    render(<App />)
+    fireEvent.change(screen.getByLabelText('Implementation cost'), { target: { value: '16000' } })
+    expect(summaryMetric('Total AI cost')).toBe('$55,838')
+    expect(stored().changeCosts['2026-Q3'].implementation).toBe(16000)
+    expect(stored().changeCosts['2026-Q2'].implementation).toBe(18000)
+  })
+
+  it('exports both ROI views and the evidence without invitation routing', async () => {
     const user = userEvent.setup()
     render(<App />)
     await user.click(screen.getByRole('button', { name: 'Export' }))
-    expect(URL.createObjectURL).toHaveBeenCalled()
-    const blob = vi.mocked(URL.createObjectURL).mock.calls.at(-1)?.[0] as Blob
-    const snapshot = JSON.parse(await blob.text())
-    expect(snapshot.roiViews.validated).toMatchObject({ roi: expect.any(Number), basis: expect.stringMatching(/no Pulse extrapolation/i) })
-    expect(snapshot.roiViews.pulseInclusive).toMatchObject({
-      projectionEligible: true,
-      roi: expect.any(Number),
-      roiInterval: { low: expect.any(Number), high: expect.any(Number) },
-      intervalScope: expect.stringMatching(/Pulse sampling variation only/i),
-    })
-    expect(await screen.findByText(/both ROI views, intervals, and policies/i)).toBeInTheDocument()
+    const snapshot = await lastSnapshot()
+    expect(snapshot.reportingPeriod).toBe('2026-Q3')
+    expect(snapshot.roiViews.validated.basis).toMatch(/no Pulse extrapolation/)
+    expect(snapshot.roiViews.pulseInclusive.intervalScope).toMatch(/sampling variation only/)
+    expect(snapshot.data.routing).toBeUndefined()
+    expect(snapshot.unitEconomics.length).toBeGreaterThan(0)
+  })
+
+  it('keeps every caveat in one Assumptions & limits drawer', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await user.click(screen.getAllByRole('button', { name: 'Assumptions & limits' })[0])
+    const drawer = screen.getByRole('dialog', { name: 'Assumptions & limits' })
+    expect(within(drawer).getByText(/covers sampling variation only/)).toBeInTheDocument()
+    expect(within(drawer).getByText(/never joined to answers and never exported/)).toBeInTheDocument()
   })
 })
 
-describe('Optional employee pulse', () => {
-  it('uses neutral wording, supports negative effects, and collects no personal fields', async () => {
+describe('Employee pulse inbox', () => {
+  it('answers a random invitation in seconds and moves the Pulse estimate', async () => {
     const user = userEvent.setup()
     render(<App />)
-    await user.click(screen.getByRole('button', { name: 'Preview pulse' }))
+    await user.click(persona('Employee'))
+    const card = screen.getByRole('region', { name: 'Pulse invitation' })
+    expect(within(card).getByText(/you used/)).toBeInTheDocument()
+    const before = document.querySelector('.impact-figure')!.textContent
+    fireEvent.change(within(card).getByRole('slider', { name: 'Task time change' }), { target: { value: '2' } })
+    await user.selectOptions(within(card).getByLabelText('What was the main immediate effect?'), 'Faster delivery')
+    await user.selectOptions(within(card).getByLabelText(/What did you use the saved time for/), 'More of the same work')
+    await user.click(within(card).getByRole('button', { name: /Send answer/ }))
+
+    expect(await screen.findByText(/Answer recorded/)).toBeInTheDocument()
+    expect(document.querySelector('.impact-figure')!.textContent).not.toBe(before)
+    expect(screen.getByText(/Your last answer moved the estimate/)).toBeInTheDocument()
+    const data = stored()
+    const answer = data.responses.find((response: { source: string; hours: number; id: string }) => response.source === 'Random invitation' && response.hours === 2 && response.id.startsWith('r-frame-2026-q3'))
+    expect(answer).toMatchObject({ effect: 'Faster delivery', reuse: 'More of the same work' })
+    expect(Object.keys(answer)).not.toContain('personKey')
+  })
+
+  it('lets people skip, and keeps self-selected previews out of the estimate', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await user.click(persona('Employee'))
+    const openBefore = screen.getByText(/invitations still open/).textContent
+    await user.click(screen.getByRole('button', { name: 'Not this time' }))
+    expect(screen.getByText(/invitations still open/).textContent).not.toBe(openBefore)
+
+    await user.click(screen.getByRole('button', { name: /Try the survey without an invitation/ }))
     const dialog = screen.getByRole('dialog')
-    expect(within(dialog).getByText('What effect, if any, did AI have on this task?')).toBeInTheDocument()
-    const product = within(dialog).getByLabelText('Product')
-    const team = within(dialog).getByLabelText('Team')
-    const workType = within(dialog).getByLabelText('Work type')
-    const slider = within(dialog).getByRole('slider', { name: 'Task time change' })
-    const hoursInput = within(dialog).getByRole('spinbutton', { name: 'Task time change in hours' })
-    expect(product).toBeVisible()
-    expect(product).toHaveValue('GitHub Copilot')
-    expect(team).toBeVisible()
-    expect(team).toHaveValue('Digital Channels')
-    expect(workType).toBeVisible()
-    expect(workType).toHaveValue('Code and tests')
-    await user.selectOptions(product, 'Copilot Cowork')
-    await user.selectOptions(team, 'Customer Operations')
-    await user.selectOptions(workType, 'Data analysis')
-    expect(within(dialog).queryByRole('radio')).not.toBeInTheDocument()
-    expect(slider).toHaveValue('0')
-    expect(hoursInput).toHaveValue(0)
-    fireEvent.change(slider, { target: { value: '1.25' } })
-    expect(hoursInput).toHaveValue(1.25)
-    fireEvent.change(hoursInput, { target: { value: '-0.5' } })
-    expect(slider).toHaveValue('-0.5')
-    expect(within(dialog).getByText('0.5 hours slower')).toBeInTheDocument()
-    expect(within(dialog).queryByLabelText('Your role')).not.toBeInTheDocument()
-    expect(within(dialog).queryByLabelText(/business result/i)).not.toBeInTheDocument()
-
-    await user.selectOptions(within(dialog).getByLabelText('What was the main immediate effect?'), 'More rework or lower quality')
-    await user.click(within(dialog).getByRole('button', { name: /Record pulse/ }))
-
-    expect(await screen.findByText(/excluded from Validated ROI and the Pulse-inclusive projection/i)).toBeInTheDocument()
-    const stored = JSON.parse(localStorage.getItem('ai-value-calculator-responses') ?? '[]')
-    expect(stored).toHaveLength(21)
-    expect(stored[0]).toMatchObject({
-      product: 'Copilot Cowork',
-      team: 'Customer Operations',
-      workType: 'Data analysis',
-      timeImpact: '-0.5',
-      effect: 'More rework or lower quality',
-    })
-    expect(stored[0]).not.toHaveProperty('role')
-  })
-
-  it('reports pulse data only in aggregate groups', async () => {
-    const user = userEvent.setup()
-    render(<App />)
-    await user.click(within(screen.getByRole('navigation', { name: 'Primary navigation' })).getByRole('button', { name: /^Pulse results/ }))
-    expect(screen.getByText('Aggregate random-sample results')).toBeInTheDocument()
-    expect(screen.getByText(/production policy requires n≥10/i)).toBeInTheDocument()
-    expect(screen.getByText('No benefit or slower')).toBeInTheDocument()
-    expect(within(document.querySelector('.mini-stat-grid') as HTMLElement).getByText('Projected net task time')).toBeInTheDocument()
-    expect(screen.getByText('A bounded estimate, not booked savings')).toBeInTheDocument()
-    expect(screen.getByText(/finite-population correction/i)).toBeInTheDocument()
-    expect(screen.getByText(/does not identify or subtract overlapping sessions itself/i)).toBeInTheDocument()
-    expect(screen.getByText(/random sampling variation only/i)).toBeInTheDocument()
-    expect(screen.getByText(/Sample time evidence: Estimated/i)).toBeInTheDocument()
+    await user.selectOptions(within(dialog).getByLabelText('What was the main immediate effect?'), 'No material change')
+    await user.click(within(dialog).getByRole('button', { name: /Record preview/ }))
+    expect(await screen.findByText(/does not enter the Pulse estimate/)).toBeInTheDocument()
+    expect(stored().responses.filter((response: { source: string }) => response.source === 'Preview')).toHaveLength(1)
   })
 })
 
-describe('Value hypothesis registry', () => {
-  it('requires an observable outcome and guardrail', async () => {
+describe('Manager: signals to tested hypotheses', () => {
+  it('shows team signals, hides small groups, and marks work measured by a study', async () => {
     const user = userEvent.setup()
     render(<App />)
-    await user.click(screen.getByRole('button', { name: 'Value hypotheses' }))
-    await user.click(screen.getByRole('button', { name: /Add hypothesis/ }))
+    await user.click(persona('Manager'))
+    expect(screen.getByRole('heading', { name: 'My team', level: 1 })).toBeInTheDocument()
+    expect(screen.getByText(/Measured by the study “Developer delivery cycle”/)).toBeInTheDocument()
+    expect(summaryMetric('Open nominations')).toBe('1 of 5')
+  })
+
+  it('nominates a sized, pre-registered hypothesis from a Pulse signal', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await user.click(persona('Manager'))
+    await user.click(nav().getByRole('button', { name: 'Pulse signals' }))
+    const row = screen.getAllByRole('row').find((candidate) => within(candidate).queryByText('Data analysis'))!
+    await user.click(within(row).getByRole('button', { name: /Nominate hypothesis/ }))
     const dialog = screen.getByRole('dialog')
-    await user.type(within(dialog).getByLabelText('AI-assisted use case'), 'Draft release notes')
-    await user.type(within(dialog).getByLabelText('Owning group'), 'Docs')
-    await user.type(within(dialog).getByLabelText('Expected work effect'), 'Faster drafting')
-    await user.type(within(dialog).getByLabelText('Observable operational outcome'), 'Publish notes earlier')
-    await user.type(within(dialog).getByLabelText('Operational evidence source'), 'Release tracker')
-    await user.type(within(dialog).getByLabelText('Quality, risk, or workload guardrail'), 'Correction rate must not rise')
-    await user.click(within(dialog).getByRole('button', { name: /Add hypothesis/ }))
-
-    expect(await screen.findByText(/hypothesis and guardrail added/i)).toBeInTheDocument()
-    expect(screen.getByText('Draft release notes')).toBeInTheDocument()
-    expect(screen.getByText('Correction rate must not rise')).toBeInTheDocument()
-    expect(JSON.parse(localStorage.getItem('ai-value-calculator-hypotheses') ?? '[]')).toHaveLength(5)
+    expect(within(dialog).getByText(/From a Pulse signal/)).toBeInTheDocument()
+    expect(within(dialog).getByLabelText('AI-assisted use case')).toHaveValue('Reduce rework in data analysis')
+    expect(within(dialog).getByText(/hours per quarter/)).toBeInTheDocument()
+    fireEvent.change(within(dialog).getByLabelText('Operational evidence source'), { target: { value: 'Quality review log' } })
+    fireEvent.change(within(dialog).getByLabelText('Quality, risk, or workload guardrail'), { target: { value: 'Turnaround must not rise' } })
+    fireEvent.change(within(dialog).getByLabelText('Primary metric'), { target: { value: 'Rework rate' } })
+    fireEvent.change(within(dialog).getByLabelText('Guardrail metric'), { target: { value: 'Turnaround time' } })
+    await user.click(within(dialog).getByRole('button', { name: /Nominate hypothesis/ }))
+    expect(await screen.findByText(/Management prioritises which to test/)).toBeInTheDocument()
+    const nominated = stored().hypotheses[0]
+    expect(nominated).toMatchObject({ status: 'Nominated', owner: 'Customer Operations', workType: 'Data analysis', successCriterion: { metric: 'Rework rate' } })
+    expect(nominated.sourceSignal).toMatch(/Pulse Q3 2026/)
   })
-})
 
-describe('Linked hypothesis workflow', () => {
-  it('starts, records, traces, persists, and exports a study without creating financial value', async () => {
+  it('needs executive approval before a study starts, then judges it against the locked criterion', async () => {
     const user = userEvent.setup()
-    const { unmount } = render(<App />)
-    const initialRoi = summaryMetric('Validated ROI')
-    const initialPulseRoi = summaryMetric('Pulse-inclusive ROI')
-    await user.click(screen.getByRole('button', { name: 'Value hypotheses' }))
-    const hypothesis = screen.getByRole('article', { name: 'Accelerate code review' })
-    expect(within(hypothesis).getByText('Ready to test')).toBeInTheDocument()
-    await user.click(within(hypothesis).getByRole('button', { name: /Start study/ }))
+    render(<App />)
+    await user.click(nav().getByRole('button', { name: 'Hypothesis priorities' }))
+    const nominated = screen.getByRole('article', { name: 'Reduce rework in data analysis' })
+    expect(within(nominated).getByText('Awaiting prioritisation')).toBeInTheDocument()
+    await user.click(within(nominated).getByRole('button', { name: /Approve for testing/ }))
+    expect(within(screen.getByRole('article', { name: 'Reduce rework in data analysis' })).getByText('Ready to test')).toBeInTheDocument()
 
-    const study = screen.getByRole('article', { name: 'Accelerate code review' })
-    expect(within(study).getByText('Reduce review wait time')).toBeInTheDocument()
-    expect(within(study).getAllByText('Deliver changes earlier').length).toBeGreaterThan(0)
-    expect(within(study).getByText('Pull request cycle time')).toBeInTheDocument()
-    expect(within(study).getByText('Change failure rate must not rise')).toBeInTheDocument()
-    expect(within(study).getByText(/\$0 potential.*excluded/)).toBeInTheDocument()
+    await user.click(persona('Manager'))
+    await user.click(nav().getByRole('button', { name: 'Hypotheses' }))
+    await user.click(screen.getByRole('checkbox', { name: /Only/ }))
+    await user.click(within(screen.getByRole('article', { name: 'Reduce rework in data analysis' })).getByRole('button', { name: /Start study/ }))
+    const study = screen.getByRole('article', { name: 'Reduce rework in data analysis' })
+    expect(within(study).getByText(/Pre-registered success criterion/)).toBeInTheDocument()
     await user.click(within(study).getByRole('button', { name: 'Record evidence' }))
 
     const dialog = screen.getByRole('dialog')
-    await user.type(within(dialog).getByLabelText('Study cohort'), 'Platform releases')
-    await user.type(within(dialog).getByLabelText('Study period'), 'Q3 2026')
-    await user.clear(within(dialog).getByLabelText('Study progress (%)'))
-    await user.type(within(dialog).getByLabelText('Study progress (%)'), '100')
+    expect(within(dialog).getByText(/locked/)).toBeInTheDocument()
+    fireEvent.change(within(dialog).getByLabelText('Study cohort'), { target: { value: '60 analyses · randomised' } })
+    fireEvent.change(within(dialog).getByLabelText('Without AI observations'), { target: { value: '40' } })
+    fireEvent.change(within(dialog).getByLabelText('Without AI mean'), { target: { value: '30' } })
+    fireEvent.change(within(dialog).getByLabelText('Without AI standard deviation'), { target: { value: '8' } })
+    fireEvent.change(within(dialog).getByLabelText('With AI observations'), { target: { value: '40' } })
+    fireEvent.change(within(dialog).getByLabelText('With AI mean'), { target: { value: '20' } })
+    fireEvent.change(within(dialog).getByLabelText('With AI standard deviation'), { target: { value: '8' } })
+    fireEvent.change(within(dialog).getByLabelText('Guardrail change (% worse)'), { target: { value: '2' } })
+    fireEvent.change(within(dialog).getByLabelText('Study progress (%)'), { target: { value: '100' } })
+    expect(within(dialog).getByText('Supported')).toBeInTheDocument()
     await user.click(within(dialog).getByRole('button', { name: 'Save evidence' }))
-    expect(within(dialog).getByRole('alert')).toHaveTextContent(/baseline, comparison, and observed result/)
-    await user.type(within(dialog).getByLabelText('Baseline'), '4 days')
-    await user.type(within(dialog).getByLabelText('Current measurement'), '4 days')
-    await user.type(within(dialog).getByLabelText('Comparison method'), 'Matched releases')
-    await user.type(within(dialog).getByLabelText('Observed result'), 'No improvement')
-    await user.selectOptions(within(dialog).getByLabelText('Outcome evidence'), 'Observed')
-    await user.click(within(dialog).getByRole('button', { name: 'Save evidence' }))
 
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
-    const completed = screen.getByRole('article', { name: 'Accelerate code review' })
-    expect(within(completed).getByText('No improvement')).toBeInTheDocument()
-    expect(within(completed).getByText('Signal')).toBeInTheDocument()
-    await user.click(within(completed).getByRole('button', { name: 'Accelerate code review' }))
-    const linkedHypothesis = screen.getByRole('article', { name: 'Accelerate code review' })
-    expect(within(linkedHypothesis).getByText('Study complete')).toBeInTheDocument()
-    expect(within(linkedHypothesis).queryByRole('button', { name: /Start study/ })).not.toBeInTheDocument()
-    await user.click(within(linkedHypothesis).getByRole('button', { name: /View study/ }))
-    expect(screen.getAllByRole('article')).toHaveLength(1)
-
-    unmount()
-    render(<App />)
-    expect(summaryMetric('Validated ROI')).toBe(initialRoi)
-    expect(summaryMetric('Pulse-inclusive ROI')).toBe(initialPulseRoi)
-    await user.click(screen.getByRole('button', { name: 'Value hypotheses' }))
-    const restored = screen.getByRole('article', { name: 'Accelerate code review' })
-    expect(within(restored).getByText('Study complete')).toBeInTheDocument()
-    await user.click(within(restored).getByRole('button', { name: /View study/ }))
-    expect(screen.getByText('No improvement')).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'All studies' }))
-    expect(screen.getAllByRole('article')).toHaveLength(4)
-
-    await user.click(screen.getByRole('button', { name: 'Export' }))
-    const blob = vi.mocked(URL.createObjectURL).mock.calls.at(-1)?.[0] as Blob
-    const snapshot = JSON.parse(await blob.text())
-    const linkedStudies = snapshot.studies.filter((record: { hypothesisId: number }) => record.hypothesisId === 4)
-    expect(linkedStudies).toHaveLength(1)
-    expect(linkedStudies[0]).toMatchObject({ stage: 'Signal', grossValue: 0, progress: 100, result: 'No improvement' })
-    expect(linkedStudies[0]).not.toHaveProperty('icon')
-    expect(snapshot.hypotheses.find((record: { id: number }) => record.id === 4)).toMatchObject({ studyId: linkedStudies[0].id, status: 'Study complete' })
-    expect(snapshot.portfolio.contributions.some((record: { id: string }) => record.id === linkedStudies[0].id)).toBe(false)
-  })
-
-  it('traces an existing validated study back to its hypothesis without creating a duplicate', async () => {
-    const user = userEvent.setup()
-    render(<App />)
-    await user.click(screen.getByRole('button', { name: 'Value hypotheses' }))
-    const hypothesis = screen.getByRole('article', { name: 'Generate unit tests' })
-    expect(within(hypothesis).getByText('Study complete')).toBeInTheDocument()
-    await user.click(within(hypothesis).getByRole('button', { name: /View study/ }))
-    const study = screen.getByRole('article', { name: 'Developer delivery cycle' })
-    expect(within(study).queryByRole('button', { name: 'Record evidence' })).not.toBeInTheDocument()
-    await user.click(within(study).getByRole('button', { name: 'Generate unit tests' }))
-    expect(screen.getAllByRole('article')).toHaveLength(1)
-    await user.click(screen.getByRole('button', { name: 'All hypotheses' }))
-    expect(screen.getAllByRole('article')).toHaveLength(4)
-    expect(localStorage.getItem('ai-value-calculator-studies')).toBeNull()
+    const saved = screen.getByRole('article', { name: 'Reduce rework in data analysis' })
+    expect(within(saved).getByText('Supported')).toBeInTheDocument()
+    expect(within(saved).getByText(/33% better than comparison/)).toBeInTheDocument()
+    expect(within(saved).getByText('Capacity')).toBeInTheDocument()
   })
 })
 
-describe('In-app financial approval', () => {
-  const completed = {
-    ...createStudyFromHypothesis({ id: 4, useCase: 'Accelerate code review', owner: 'Platform Engineering', product: 'GitHub Copilot', expectedEffect: 'Reduce review wait time', outcome: 'Deliver changes earlier', evidence: 'Pull request cycle time', guardrail: 'Change failure rate must not rise' }),
-    progress: 100, cohort: 'Platform releases', period: 'Q3 2026', baseline: '4 days', comparison: 'Matched releases', result: '2 days earlier, quality unchanged', operationalGrade: 'Observed' as const,
-  }
-
-  it('submits, approves, persists, exports, and reconciles a claim inside the app', async () => {
-    localStorage.setItem('ai-value-calculator-studies', JSON.stringify([completed]))
+describe('Financial approval and decisions', () => {
+  it('values a supported study, approves it, and updates the next-dollar suggestion', async () => {
     const user = userEvent.setup()
-    const { unmount } = render(<App />)
-    expect(summaryMetric('Validated claim value')).toBe('$99,900')
-    await user.click(screen.getByRole('button', { name: 'Outcome studies' }))
-    await user.click(within(screen.getByRole('article', { name: completed.name })).getByRole('button', { name: 'Prepare valuation' }))
-    const proposalDialog = screen.getByRole('dialog')
-    expect(within(proposalDialog).getByText(/self-declared, not authenticated/)).toBeInTheDocument()
-    await user.type(within(proposalDialog).getByLabelText('Prepared by'), 'Process owner (demo)')
-    await user.type(within(proposalDialog).getByLabelText('Proposed gross value ($)'), '12000')
-    await user.type(within(proposalDialog).getByLabelText('Valuation formula'), '240 reused backlog hours x $50')
-    await user.type(within(proposalDialog).getByLabelText('Valuation source'), 'Backlog contribution report')
-    await user.selectOptions(within(proposalDialog).getByLabelText('Claim confidence'), 'High')
-    await user.type(within(proposalDialog).getByLabelText('Benefit scope key'), 'platform|review-capacity|2026-q3')
-    await user.type(within(proposalDialog).getByLabelText('Attribution and valuation assumptions'), 'Capacity used on committed demand with unchanged quality.')
-    await user.click(within(proposalDialog).getByRole('button', { name: 'Submit for review' }))
-    const pending = screen.getByRole('article', { name: completed.name })
-    expect(within(pending).getByText('Pending financial review')).toBeInTheDocument()
-    expect(within(pending).queryByRole('button', { name: 'Record evidence' })).not.toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Overview', exact: true }))
-    expect(summaryMetric('Validated claim value')).toBe('$99,900')
-    await user.click(screen.getByRole('button', { name: 'Outcome studies' }))
-    await user.click(screen.getByRole('checkbox', { name: /Pending financial reviews/ }))
-    expect(screen.getAllByRole('article')).toHaveLength(1)
+    render(<App />)
+    await user.click(nav().getByRole('button', { name: 'Next-dollar decisions' }))
+    const before = screen.getAllByRole('row').find((row) => within(row).queryByText('Customer Operations'))!
+    expect(within(before).getAllByText('Keep measuring').length).toBeGreaterThan(0)
+
+    await user.click(nav().getByRole('button', { name: 'Financial approvals' }))
+    await user.click(screen.getByRole('button', { name: 'Propose valuation' }))
+    let dialog = screen.getByRole('dialog')
+    expect(within(dialog).getByRole('option', { name: 'High' })).toBeDisabled()
+    fireEvent.change(within(dialog).getByLabelText('Prepared by'), { target: { value: 'Customer Operations manager' } })
+    fireEvent.change(within(dialog).getByLabelText('Proposed gross value ($)'), { target: { value: '40000' } })
+    fireEvent.change(within(dialog).getByLabelText('Benefit scope key'), { target: { value: 'customer-operations|case-prep|2026-q3' } })
+    fireEvent.change(within(dialog).getByLabelText('Valuation formula'), { target: { value: '800 extra cases × $50' } })
+    fireEvent.change(within(dialog).getByLabelText('Valuation source'), { target: { value: 'Case throughput report' } })
+    fireEvent.change(within(dialog).getByLabelText('Attribution and valuation assumptions'), { target: { value: 'Released time absorbed the backlog.' } })
+    await user.click(within(dialog).getByRole('button', { name: /Submit for review/ }))
+    expect(await screen.findByText(/ROI unchanged until finance approves/)).toBeInTheDocument()
+
     await user.click(screen.getByRole('button', { name: 'Review valuation' }))
-    const reviewDialog = screen.getByRole('dialog')
-    expect(within(reviewDialog).queryByLabelText('Proposed gross value ($)')).not.toBeInTheDocument()
-    await user.type(within(reviewDialog).getByLabelText('Finance reviewer'), 'Finance owner (demo)')
-    await user.type(within(reviewDialog).getByLabelText('Decision rationale'), 'Evidence, value rate, and benefit scope accepted.')
-    await user.click(within(reviewDialog).getByRole('button', { name: 'Approve claim' }))
-    expect(within(reviewDialog).getByRole('alert')).toHaveTextContent(/Confirm attribution/)
-    await user.click(within(reviewDialog).getByLabelText('Outcome attribution and valuation evidence reviewed'))
-    await user.click(within(reviewDialog).getByLabelText('Quality, risk, and workload guardrails accepted'))
-    await user.click(within(reviewDialog).getByLabelText('Duplicate claims and Pulse scope exclusion checked'))
-    await user.click(within(reviewDialog).getByRole('button', { name: 'Approve claim' }))
-    await user.click(screen.getByRole('button', { name: 'Overview', exact: true }))
-    expect(summaryMetric('Validated claim value')).toBe('$108,900')
+    dialog = screen.getByRole('dialog')
+    fireEvent.change(within(dialog).getByLabelText('Finance reviewer'), { target: { value: 'Finance owner (demo)' } })
+    fireEvent.change(within(dialog).getByLabelText('Decision rationale'), { target: { value: 'Accepted at low confidence.' } })
+    await user.click(within(dialog).getByRole('button', { name: /Approve claim/ }))
+    expect(within(dialog).getByRole('alert')).toHaveTextContent(/Confirm attribution/)
+    await user.click(within(dialog).getByLabelText('Outcome attribution and valuation evidence reviewed'))
+    await user.click(within(dialog).getByLabelText('Quality, risk, and workload guardrails accepted'))
+    await user.click(within(dialog).getByLabelText('Duplicate claims and Pulse scope exclusion checked'))
+    await user.click(within(dialog).getByRole('button', { name: /Approve claim/ }))
 
-    unmount()
-    render(<App />)
-    expect(summaryMetric('Validated claim value')).toBe('$108,900')
-    await user.click(screen.getByRole('button', { name: 'Outcome studies' }))
-    await user.click(within(screen.getByRole('article', { name: completed.name })).getByRole('button', { name: 'View approval' }))
-    const approvalDialog = screen.getByRole('dialog')
-    expect(within(approvalDialog).getByText('Approved')).toBeInTheDocument()
-    await user.click(within(approvalDialog).getByRole('button', { name: 'Record realization' }))
-    await user.clear(within(approvalDialog).getByLabelText('Realized gross value ($)'))
-    await user.type(within(approvalDialog).getByLabelText('Realized gross value ($)'), '8000')
-    await user.type(within(approvalDialog).getByLabelText('Finance reviewer'), 'Finance owner (demo)')
-    await user.clear(within(approvalDialog).getByLabelText('Realized value formula'))
-    await user.type(within(approvalDialog).getByLabelText('Realized value formula'), '160 hours x $50')
-    await user.type(within(approvalDialog).getByLabelText('Reconciliation source'), 'Reconciled contribution report')
-    await user.type(within(approvalDialog).getByLabelText('Reconciliation and variance rationale'), 'Lower committed demand than forecast.')
-    await user.click(within(approvalDialog).getByRole('button', { name: 'Confirm realization' }))
-    expect(within(screen.getByRole('article', { name: completed.name })).getByText('Realized')).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Overview', exact: true }))
-    expect(summaryMetric('Validated claim value')).toBe('$107,900')
-    await user.click(screen.getByRole('button', { name: 'Export' }))
-    const blob = vi.mocked(URL.createObjectURL).mock.calls.at(-1)?.[0] as Blob
-    const snapshot = JSON.parse(await blob.text())
-    const exported = snapshot.studies.find((study: { id: string }) => study.id === completed.id)
-    expect(exported.financialReview.history.map((entry: { action: string }) => entry.action)).toEqual(['Submitted', 'Approved', 'Realized'])
-    expect(exported.financialReview.proposal.grossValue).toBe(12000)
-    expect(exported.realization.grossValue).toBe(8000)
-    expect(snapshot.portfolio.validatedValue).toBe(107900)
-  })
+    await user.click(nav().getByRole('button', { name: 'Portfolio' }))
+    expect(summaryMetric('Validated value')).toBe('$80,480')
 
-  it('returns a valuation for changes without adding value and preserves it for revision', async () => {
-    const pending = submitFinancialReview(completed, {
-      pillar: 'Improved Performance', grossValue: 12000, valuationFormula: '240 hours x $50', valuationSource: 'Draft valuation', valuationGrade: 'Modelled',
-      confidence: 'High', overlapKey: 'platform|review-capacity|2026-q3', policyVersion: 'demo-claim-policy-v1', assumptions: 'Capacity reuse still under review.',
-    }, 'Process owner (demo)', [])
-    localStorage.setItem('ai-value-calculator-studies', JSON.stringify([pending]))
-    const user = userEvent.setup()
-    render(<App />)
-    await user.click(screen.getByRole('button', { name: 'Outcome studies' }))
-    await user.click(within(screen.getByRole('article', { name: completed.name })).getByRole('button', { name: 'Review valuation' }))
-    const dialog = screen.getByRole('dialog')
-    await user.type(within(dialog).getByLabelText('Finance reviewer'), 'Finance owner (demo)')
-    await user.type(within(dialog).getByLabelText('Decision rationale'), 'Provide evidence of reused capacity.')
-    await user.click(within(dialog).getByRole('button', { name: 'Return for changes' }))
-    const rejected = screen.getByRole('article', { name: completed.name })
-    expect(within(rejected).getByText('Changes requested')).toBeInTheDocument()
-    expect(within(rejected).getByRole('button', { name: 'Record evidence' })).toBeEnabled()
-    await user.click(within(rejected).getByRole('button', { name: 'Prepare valuation' }))
-    expect(within(screen.getByRole('dialog')).getByLabelText('Proposed gross value ($)')).toHaveValue(12000)
-    expect(screen.getByText('Provide evidence of reused capacity.')).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Close', exact: true }))
-    await user.click(screen.getByRole('button', { name: 'Overview', exact: true }))
-    expect(summaryMetric('Validated claim value')).toBe('$99,900')
+    await user.click(nav().getByRole('button', { name: 'Next-dollar decisions' }))
+    const after = screen.getAllByRole('row').find((row) => within(row).queryByText('Customer Operations'))!
+    expect(within(after).getAllByText('Scale').length).toBeGreaterThan(0)
+    await user.click(screen.getByRole('button', { name: 'Record decision for Customer Operations' }))
+    dialog = screen.getByRole('dialog')
+    fireEvent.change(within(dialog).getByLabelText('Rationale'), { target: { value: 'Case preparation pays back; extend to all case teams.' } })
+    await user.click(within(dialog).getByRole('button', { name: /Record decision/ }))
+    expect(await screen.findByText(/Decision recorded for Customer Operations/)).toBeInTheDocument()
+    expect(stored().decisions.at(-1)).toMatchObject({ team: 'Customer Operations', decision: 'Scale', suggested: 'Scale', period: '2026-Q3' })
   })
 })
 
-describe('Outcome studies and claim register', () => {
-  it('shows study designs, dual provenance, exclusions, and an auditable claims register', async () => {
+describe('Rules, sampling, and the bill', () => {
+  it('publishes a new policy version after previewing its impact', async () => {
     const user = userEvent.setup()
     render(<App />)
-    await user.click(screen.getByRole('button', { name: 'Outcome studies' }))
-    expect(screen.getAllByText('Developer delivery cycle').length).toBeGreaterThan(0)
-    expect(screen.getByText('84 engineers · matched teams')).toBeInTheDocument()
-    expect(screen.getByText('126 participants · pre/post')).toBeInTheDocument()
-    expect(screen.getByText('42 opportunities · staggered rollout')).toBeInTheDocument()
-    expect(screen.getByText('Every claim, including those excluded from Validated ROI')).toBeInTheDocument()
-    expect(screen.getByText('Source: Finance backlog valuation policy v1')).toBeInTheDocument()
-    expect(screen.getAllByText(/excluded/i).length).toBeGreaterThan(0)
-    expect(screen.getAllByText(/Outcome: Observed/).length).toBeGreaterThan(0)
-    expect(screen.getAllByText(/Value: Modelled/).length).toBeGreaterThan(0)
-  })
-})
-
-describe('Aggregate CSV ingestion', () => {
-  it('accepts grouped data without direct identifiers', async () => {
-    const user = userEvent.setup()
-    const { container } = render(<App />)
-    await user.click(screen.getByRole('button', { name: 'Data imports' }))
-    const csv = 'product,team,role_group,period,active_users,cost\nGitHub Copilot,Digital Channels,Engineering,2026-07,42,50\n'
-    const file = new File([csv], 'test-team-usage.csv', { type: 'text/csv' })
-    const input = container.querySelector('input[type="file"]') as HTMLInputElement
-    await user.upload(input, file)
-    expect(await screen.findByText('test-team-usage.csv')).toBeInTheDocument()
-    const stored = JSON.parse(localStorage.getItem('ai-value-calculator-imports') ?? '[]')
-    expect(stored[0].status).toBe('Ready')
-    expect(stored[0].note).toMatch(/no direct identifiers/i)
+    await user.click(nav().getByRole('button', { name: 'Rules & policy' }))
+    fireEvent.change(screen.getByLabelText('Modelled weight'), { target: { value: '50' } })
+    expect(screen.getByText('Evidence weight · Modelled: 70% → 50%')).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('Reason for the change'), { target: { value: 'Tighter modelled valuations' } })
+    await user.click(screen.getByRole('button', { name: /Publish policy-v2/ }))
+    expect(await screen.findByText(/policy-v2 published/)).toBeInTheDocument()
+    expect(stored().policy).toMatchObject({ version: 2, evidenceWeights: { Modelled: 0.5 } })
+    expect(stored().policyHistory[0]).toMatchObject({ version: 2, reason: 'Tighter modelled valuations' })
+    await user.click(nav().getByRole('button', { name: 'Portfolio' }))
+    expect(summaryMetric('Validated ROI')).toBe('14%')
   })
 
-  it('rejects a file containing a direct user identifier', async () => {
+  it('shows the random sample, its burden, and what the studies cover', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await user.click(nav().getByRole('button', { name: 'Sampling engine' }))
+    expect(screen.getByText('The survey costs seconds, not the savings')).toBeInTheDocument()
+    expect(screen.getByText(/194 of 287/)).toBeInTheDocument()
+    expect(screen.getByText(/2,957 sessions left out when the sample was drawn/)).toBeInTheDocument()
+  })
+
+  it('imports a new quarter’s bill, registers new products, and draws its sample', async () => {
     const user = userEvent.setup()
     const { container } = render(<App />)
-    await user.click(screen.getByRole('button', { name: 'Data imports' }))
-    const csv = 'product,team,email,cost\nGitHub Copilot,Digital Channels,person@example.com,50\n'
-    const file = new File([csv], 'unsafe.csv', { type: 'text/csv' })
-    const input = container.querySelector('input[type="file"]') as HTMLInputElement
-    await user.upload(input, file)
-    const stored = JSON.parse(localStorage.getItem('ai-value-calculator-imports') ?? '[]')
-    expect(stored[0].status).toBe('Needs mapping')
-    expect(stored[0].note).toMatch(/direct identifier/i)
+    await user.click(nav().getByRole('button', { name: 'Bills & usage data' }))
+    const csv = 'period,product,team,active_users,task_sessions,credits,cost\n2026-10,GitHub Copilot,Digital Channels,87,2330,7250,2460\n2026-10,Azure AI agents,Platform Engineering,12,400,2000,900\n'
+    await user.upload(container.querySelector('input[type="file"]') as HTMLInputElement, new File([csv], 'q4.csv', { type: 'text/csv' }))
+    expect(await screen.findByText(/q4.csv: 2 rows applied to Q4 2026/)).toBeInTheDocument()
+    expect(stored().products.map((product: { name: string }) => product.name)).toContain('Azure AI agents')
+
+    await user.selectOptions(screen.getByLabelText('Reporting quarter'), '2026-Q4')
+    expect(screen.getByText(/\$3,360 consumption spend/)).toBeInTheDocument()
+    await user.click(nav().getByRole('button', { name: 'Sampling engine' }))
+    await user.click(screen.getByRole('button', { name: /Draw sample for Q4 2026/ }))
+    expect(await screen.findByText(/Drew \d+ invitations for Q4 2026/)).toBeInTheDocument()
+    expect(stored().frames.find((frame: { period: string }) => frame.period === '2026-Q4').months).toEqual(['2026-10'])
+
+    await user.click(nav().getByRole('button', { name: 'Bills & usage data' }))
+    const november = 'period,product,team,active_users,task_sessions,credits,cost\n2026-11,GitHub Copilot,Digital Channels,88,2400,7400,2500\n'
+    await user.upload(container.querySelector('input[type="file"]') as HTMLInputElement, new File([november], 'nov.csv', { type: 'text/csv' }))
+    await screen.findByText(/nov.csv: 1 rows applied/)
+    await user.click(nav().getByRole('button', { name: 'Sampling engine' }))
+    expect(screen.getByText(/which this sample doesn’t cover/)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /Extend sample/ }))
+    expect(await screen.findByText(/Added \d+ invitations for the new months/)).toBeInTheDocument()
+    expect(stored().frames.find((frame: { period: string }) => frame.period === '2026-Q4').months).toEqual(['2026-10', '2026-11'])
+  })
+
+  it('rejects a bill with direct identifiers', async () => {
+    const user = userEvent.setup()
+    const { container } = render(<App />)
+    await user.click(nav().getByRole('button', { name: 'Bills & usage data' }))
+    const csv = 'period,product,team,email,cost\n2026-10,GitHub Copilot,Digital Channels,person@example.com,50\n'
+    await user.upload(container.querySelector('input[type="file"]') as HTMLInputElement, new File([csv], 'unsafe.csv', { type: 'text/csv' }))
+    expect(await screen.findByText(/unsafe.csv was not applied/)).toBeInTheDocument()
+    expect(stored().imports[0]).toMatchObject({ status: 'Rejected', note: expect.stringMatching(/Direct identifier "email"/) })
   })
 })
