@@ -130,7 +130,11 @@ export type StratumEstimate = {
   meanValue: number
   calibration: number
   calibrationSource: 'Study' | 'Policy default'
+  estimatedPositiveHours: number
+  estimatedNegativeHours: number
   estimatedHours: number
+  calibratedHours: number
+  reusedHours: number
   estimatedValue: number
   hoursVariance: number
   valueVariance: number
@@ -179,6 +183,14 @@ export function estimatePulse(input: {
     const calibration = calibrationForStratum(key, input.calibration, policy)
     const hours = responses.map((response) => response.hours)
     const values = hours.map((value) => modelledTaskValue(value, calibration.factor, reuse.rate, policy))
+    const estimatedPositiveHours = population * mean(hours.map((value) => Math.max(0, value)))
+    const estimatedNegativeHours = population * mean(hours.map((value) => Math.min(0, value)))
+    const calibratedNegativeHours = policy.lossTreatment === 'Same discounts'
+      ? estimatedNegativeHours * calibration.factor
+      : estimatedNegativeHours
+    const calibratedHours = estimatedPositiveHours * calibration.factor + calibratedNegativeHours
+    const reusedHours = estimatedPositiveHours * calibration.factor * reuse.rate
+      + (policy.lossTreatment === 'Same discounts' ? calibratedNegativeHours * reuse.rate : calibratedNegativeHours)
     const meanHours = mean(hours)
     const meanValue = mean(values)
     const valueVariance = stratumTotalVariance(values, population, policy.designEffect)
@@ -199,7 +211,11 @@ export function estimatePulse(input: {
       meanValue,
       calibration: calibration.factor,
       calibrationSource: calibration.source,
+      estimatedPositiveHours,
+      estimatedNegativeHours,
       estimatedHours: population * meanHours,
+      calibratedHours,
+      reusedHours,
       estimatedValue: population * meanValue,
       hoursVariance: stratumTotalVariance(hours, population, policy.designEffect),
       valueVariance,
@@ -226,7 +242,11 @@ export function estimatePulse(input: {
   const projectionEligible = reasons.length === 0 && active.length > 0
   const degreesOfFreedom = Math.max(1, Math.min(...active.map((stratum) => Math.max(1, stratum.responses - 1)), Number.POSITIVE_INFINITY))
   const criticalValue = tCritical95(degreesOfFreedom)
+  const estimatedPositiveHours = active.reduce((sum, stratum) => sum + stratum.estimatedPositiveHours, 0)
+  const estimatedNegativeHours = active.reduce((sum, stratum) => sum + stratum.estimatedNegativeHours, 0)
   const estimatedHours = active.reduce((sum, stratum) => sum + stratum.estimatedHours, 0)
+  const calibratedHours = active.reduce((sum, stratum) => sum + stratum.calibratedHours, 0)
+  const reusedHours = active.reduce((sum, stratum) => sum + stratum.reusedHours, 0)
   const estimatedValue = active.reduce((sum, stratum) => sum + stratum.estimatedValue, 0)
   const hoursMargin = criticalValue * Math.sqrt(active.reduce((sum, stratum) => sum + stratum.hoursVariance, 0))
   const valueMargin = criticalValue * Math.sqrt(active.reduce((sum, stratum) => sum + stratum.valueVariance, 0))
@@ -251,7 +271,11 @@ export function estimatePulse(input: {
     excludedTaskEvents: strata.reduce((sum, stratum) => sum + stratum.excluded, 0) + (frame?.excludedScopes.reduce((sum, scope) => sum + scope.sessions, 0) ?? 0),
     frameExclusions: frame?.excludedScopes ?? [],
     lateExclusions,
+    estimatedPositiveHours,
+    estimatedNegativeHours,
     estimatedHours,
+    calibratedHours,
+    reusedHours,
     hoursInterval: { low: estimatedHours - hoursMargin, high: estimatedHours + hoursMargin },
     estimatedValue,
     valueInterval: { low: estimatedValue - valueMargin, high: estimatedValue + valueMargin },

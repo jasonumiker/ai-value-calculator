@@ -43,9 +43,11 @@ Costs and value always cover the same quarter:
 
 In the Q3 2026 demo, total cost is $45,838 and validated value is $66,480 (45% ROI). The Pulse estimates a further $47,994 (95% interval $20,268 to $75,720), for a Pulse-inclusive ROI of 150%. The trend shows Q2 at −39% validated ROI, a heavy-implementation quarter before the studies reported.
 
+The interactive **How the Pulse estimate was built** waterfall makes that modelled value auditable. Drill from the bill and study exclusions into the eligible population and random sample, then through reported time, study calibration, productive reuse, the finance-owned dollar rate, and the final sampling interval. The last step reconciles validated value, Pulse value, and total cost back to the Pulse-inclusive ROI headline.
+
 **Unit economics** asks the consumption-pricing question directly: for each product and work type, is the modelled value of a sampled session worth its cost per session? In the demo, customer communication, document drafting, and documentation are *Worth it*. Data analysis, where people report rework, and debugging, where a study found self-reports can't be trusted, are *Not worth it* under current practice. The rest are still *Uncertain* at this sample size.
 
-![Portfolio with period-aligned costs, both ROI views, the long tail, hit rate, trend, the monthly bill, and unit economics](docs/screenshots/portfolio-overview.png)
+![Portfolio with period-aligned costs, both ROI views, the interactive Pulse calculation waterfall, trend, the monthly bill, and unit economics](docs/screenshots/portfolio-overview.png)
 
 ### Next-dollar decisions
 

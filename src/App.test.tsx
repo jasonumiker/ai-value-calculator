@@ -33,6 +33,10 @@ describe('Finance and executive portfolio', () => {
     expect(summaryMetric('Validated ROI')).toBe('45%')
     expect(summaryMetric('Pulse-inclusive ROI')).toBe('150%')
     expect(screen.getByText(/95% sampling interval 89% to 210%/)).toBeInTheDocument()
+    const waterfall = screen.getByRole('region', { name: 'Pulse calculation waterfall' })
+    expect(within(waterfall).getByText('How the Pulse estimate was built')).toBeInTheDocument()
+    expect(within(waterfall).getByRole('button', { name: /Bill population 19,847 sessions/ })).toBeInTheDocument()
+    expect(within(waterfall).getByRole('button', { name: /Pulse estimate \$47,994/ })).toBeInTheDocument()
     expect(screen.getByText('Is the next credit worth it? Cost vs modelled value per task session')).toBeInTheDocument()
     expect(screen.getAllByText('Not worth it').length).toBeGreaterThan(0)
 
@@ -57,8 +61,32 @@ describe('Finance and executive portfolio', () => {
     expect(snapshot.reportingPeriod).toBe('2026-Q3')
     expect(snapshot.roiViews.validated.basis).toMatch(/no Pulse extrapolation/)
     expect(snapshot.roiViews.pulseInclusive.intervalScope).toMatch(/sampling variation only/)
+    expect(snapshot.pulse.calculationWaterfall).toMatchObject({
+      billTaskSessions: 19847,
+      excludedTaskEvents: 6553,
+      eligibleTaskEvents: 13294,
+    })
+    expect(snapshot.pulse.calculationWaterfall.estimatedValue).toBeCloseTo(47994, 0)
+    expect(snapshot.pulse.calculationWaterfall.reusedHours * snapshot.pulse.calculationWaterfall.contributionValuePerHour)
+      .toBeCloseTo(snapshot.pulse.calculationWaterfall.estimatedValue, 5)
     expect(snapshot.data.routing).toBeUndefined()
     expect(snapshot.unitEconomics.length).toBeGreaterThan(0)
+  })
+
+  it('drills into calibration and reconciles the Pulse-inclusive ROI', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    const waterfall = screen.getByRole('region', { name: 'Pulse calculation waterfall' })
+
+    await user.click(within(waterfall).getByRole('button', { name: /Self-report calibration/ }))
+    expect(within(waterfall).getByRole('heading', { name: 'Discount self-reports with matching timing studies' })).toBeInTheDocument()
+    expect(within(waterfall).getByText(/14% of eligible sessions use study-derived factors/)).toBeInTheDocument()
+    expect(within(waterfall).getAllByText('Matching study').length).toBeGreaterThan(0)
+
+    await user.click(within(waterfall).getByRole('button', { name: /Pulse estimate/ }))
+    expect(within(waterfall).getByText('$20,268 to $75,720')).toBeInTheDocument()
+    expect(within(waterfall).getByText(/sampling variation only/)).toBeInTheDocument()
+    expect(within(waterfall).getByText('150% ROI')).toBeInTheDocument()
   })
 
   it('keeps every caveat in one Assumptions & limits drawer', async () => {

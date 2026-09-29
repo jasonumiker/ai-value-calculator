@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import Papa from 'papaparse'
 import {
   Activity,
@@ -91,6 +91,8 @@ function App() {
   const [notice, setNotice] = useState('')
   const noticeTimer = useRef<number | undefined>(undefined)
   const fileInput = useRef<HTMLInputElement>(null)
+
+  useEffect(() => () => window.clearTimeout(noticeTimer.current), [])
 
   const periods = useMemo(() => availablePeriods(data), [data])
   const period = periods.includes(ui.period) ? ui.period : periods[periods.length - 1] ?? ui.period

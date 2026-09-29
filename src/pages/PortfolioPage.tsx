@@ -1,5 +1,6 @@
 import { ArrowRight, CircleDollarSign, Gauge, Target, TrendingUp } from 'lucide-react'
 import { MonthlySpendChart, TrendChart } from '../components/charts'
+import { PulseWaterfall } from '../components/PulseWaterfall'
 import { EconomicsBadge, EvidenceBadge, Metric, PanelHeader, ProductMark } from '../components/ui'
 import { formatCurrency, formatHours, formatMoneyPrecise, formatPercent, formatRatio, formatShort } from '../domain/format'
 import { periodLabel } from '../domain/periods'
@@ -64,6 +65,17 @@ export function PortfolioPage({ data, actions, view, trend, global, period, navi
           <p className="panel-foot">Not every experiment needs to succeed. The supported ones, together with the long tail, need to justify the whole budget.</p>
         </section>
       </div>
+
+      <PulseWaterfall
+        billSessions={view.sessions.length}
+        productCost={portfolio.productCost}
+        totalCost={portfolio.totalCost}
+        validatedValue={portfolio.validatedValue}
+        projection={projection}
+        policy={view.policy}
+        combinedRoi={combined.roi}
+        combinedRoiInterval={combined.roiInterval}
+      />
 
       <div className="two-column">
         <section className="panel">
